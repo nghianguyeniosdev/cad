@@ -1,5 +1,13 @@
 use std::io::Write;
 
+pub mod adapters;
+pub mod app;
+pub mod cli;
+pub mod doctor;
+pub mod domain;
+pub mod ports;
+pub mod wiring;
+
 /// Exit code for a usage error (unrecognized command / bad invocation).
 const EXIT_USAGE: i32 = 2;
 /// Exit code for a recognized command that has no implementation yet.
