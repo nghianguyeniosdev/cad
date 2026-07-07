@@ -29,7 +29,7 @@ fn unknown_command_exits_nonzero() {
 
 #[test]
 fn stub_subcommands_are_recognized_but_not_yet_implemented() {
-    for cmd in ["download", "doctor", "init"] {
+    for cmd in ["doctor", "init"] {
         let (code, output) = run_capture(&["acd", cmd]);
 
         assert_eq!(

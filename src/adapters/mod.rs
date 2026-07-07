@@ -3,4 +3,5 @@
 //! (`FileStore`), and `indicatif`/plain progress (`ProgressReporter`).
 //! See ADR 0004.
 
+pub mod aws;
 pub mod fs;
