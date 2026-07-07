@@ -229,3 +229,98 @@ async fn download_respects_the_concurrency_limit() {
         "should actually run Assets concurrently; saw {max}"
     );
 }
+
+#[tokio::test]
+async fn present_asset_with_matching_md5_is_skipped_as_cached() {
+    // The Asset's expected MD5 is md5("hello"); the file already on disk reports
+    // that same MD5, so it must be skipped WITHOUT fetching. The source serves
+    // WRONG bytes, so any fetch would fail — cached==1 & failed==0 proves skip.
+    let assets = vec![Asset {
+        name: "a.bin".into(),
+        size: 5,
+        expected_md5: "5d41402abc4b2a76b9719d911017c592".into(),
+    }];
+    let bytes = HashMap::from([("a.bin".to_string(), b"WRONG-BYTES".to_vec())]);
+
+    let mut files = FakeFileStore::default();
+    files.existing.insert(
+        PathBuf::from("out/core-rgp/a.bin"),
+        "5d41402abc4b2a76b9719d911017c592".into(),
+    );
+
+    let source = Arc::new(FakePackageSource { assets, bytes });
+    let files = Arc::new(files);
+    let service = DownloadService::new(source, files.clone());
+
+    let summary = service.run(&single_entry_manifest()).await;
+
+    assert_eq!(summary.cached, 1, "present matching Asset should be cached");
+    assert_eq!(summary.downloaded, 0, "cached Asset is not re-downloaded");
+    assert_eq!(summary.failed, 0, "skip means no fetch, so no failure");
+    assert!(
+        files.written.lock().unwrap().is_empty(),
+        "a cached Asset must not be re-written"
+    );
+}
+
+fn one_asset(name: &str, md5: &str) -> Vec<Asset> {
+    vec![Asset {
+        name: name.into(),
+        size: 5,
+        expected_md5: md5.into(),
+    }]
+}
+
+fn zero_backoff() -> acd::app::RetryPolicy {
+    acd::app::RetryPolicy {
+        max_retries: 3,
+        backoff: std::time::Duration::ZERO,
+    }
+}
+
+#[tokio::test]
+async fn transient_failures_are_retried_until_success() {
+    // Fails transiently twice, then serves md5("hello"). With retries, the 3rd
+    // fetch succeeds.
+    let source = Arc::new(fakes::FlakyFetchSource::new(
+        one_asset("a.bin", "5d41402abc4b2a76b9719d911017c592"),
+        b"hello".to_vec(),
+        2,
+    ));
+    let files = Arc::new(FakeFileStore::default());
+    let service = DownloadService::new(source.clone(), files).with_retry_policy(zero_backoff());
+
+    let summary = service.run(&single_entry_manifest()).await;
+
+    assert_eq!(summary.downloaded, 1, "should succeed after retries");
+    assert_eq!(summary.failed, 0);
+    assert_eq!(
+        source.fetch_calls.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "2 failures + 1 success"
+    );
+}
+
+#[tokio::test]
+async fn transient_failures_exhaust_retries_then_fail() {
+    // Always fails transiently. With max_retries=3, that's 1 initial + 3 retries
+    // = 4 fetch attempts, then the Asset is marked failed and the run continues.
+    let source = Arc::new(fakes::FlakyFetchSource::new(
+        one_asset("a.bin", "5d41402abc4b2a76b9719d911017c592"),
+        b"hello".to_vec(),
+        1000,
+    ));
+    let files = Arc::new(FakeFileStore::default());
+    let service = DownloadService::new(source.clone(), files).with_retry_policy(zero_backoff());
+
+    let summary = service.run(&single_entry_manifest()).await;
+
+    assert_eq!(summary.downloaded, 0);
+    assert_eq!(summary.failed, 1);
+    assert_eq!(summary.exit_code(), 1);
+    assert_eq!(
+        source.fetch_calls.load(std::sync::atomic::Ordering::SeqCst),
+        4,
+        "1 initial attempt + 3 retries"
+    );
+}

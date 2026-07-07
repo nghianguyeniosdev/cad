@@ -145,9 +145,10 @@ fn run_download(
         let summary = service.download(&plan).await;
         let _ = writeln!(
             out,
-            "Fetched {} in {} files; {} failed.",
+            "Fetched {} in {} files ({} cached); {} failed.",
             human_bytes(summary.bytes),
             summary.downloaded,
+            summary.cached,
             summary.failed
         );
         for name in &summary.failed_assets {

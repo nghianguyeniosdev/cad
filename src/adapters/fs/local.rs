@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use md5::{Digest, Md5};
 
 use crate::domain::FailureKind;
 use crate::ports::FileStore;
@@ -12,6 +13,13 @@ pub struct LocalFileStore;
 
 #[async_trait]
 impl FileStore for LocalFileStore {
+    async fn existing_md5(&self, dest: &Path) -> Option<String> {
+        let bytes = tokio::fs::read(dest).await.ok()?;
+        let mut hasher = Md5::new();
+        hasher.update(&bytes);
+        Some(hex::encode(hasher.finalize()))
+    }
+
     async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), FailureKind> {
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)

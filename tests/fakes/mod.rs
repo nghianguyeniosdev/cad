@@ -34,14 +34,20 @@ impl PackageSource for FakePackageSource {
 }
 
 /// A `FileStore` that records every write in memory so tests can assert what
-/// was persisted (and what was not).
+/// was persisted (and what was not). `existing` presets the MD5s of files
+/// considered already-present on disk (for Verify-and-Skip tests).
 #[derive(Default)]
 pub struct FakeFileStore {
     pub written: Mutex<HashMap<PathBuf, Vec<u8>>>,
+    pub existing: HashMap<PathBuf, String>,
 }
 
 #[async_trait]
 impl FileStore for FakeFileStore {
+    async fn existing_md5(&self, dest: &Path) -> Option<String> {
+        self.existing.get(dest).cloned()
+    }
+
     async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), FailureKind> {
         self.written
             .lock()
@@ -82,5 +88,52 @@ impl PackageSource for ConcurrencyProbeSource {
         tokio::time::sleep(Duration::from_millis(20)).await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
         Ok(b"data".to_vec())
+    }
+}
+
+/// A `PackageSource` that fails the first `remaining_failures` fetches with a
+/// `Transient` error, then serves `bytes`. Records total fetch attempts so
+/// tests can assert the retry bound.
+pub struct FlakyFetchSource {
+    pub assets: Vec<Asset>,
+    pub bytes: Vec<u8>,
+    pub remaining_failures: AtomicUsize,
+    pub fetch_calls: AtomicUsize,
+}
+
+impl FlakyFetchSource {
+    pub fn new(assets: Vec<Asset>, bytes: Vec<u8>, initial_failures: usize) -> Self {
+        Self {
+            assets,
+            bytes,
+            remaining_failures: AtomicUsize::new(initial_failures),
+            fetch_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl PackageSource for FlakyFetchSource {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, FailureKind> {
+        Ok(self.assets.clone())
+    }
+
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, FailureKind> {
+        self.fetch_calls.fetch_add(1, Ordering::SeqCst);
+        let should_fail = self
+            .remaining_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                if n > 0 {
+                    Some(n - 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok();
+        if should_fail {
+            Err(FailureKind::Transient)
+        } else {
+            Ok(self.bytes.clone())
+        }
     }
 }
