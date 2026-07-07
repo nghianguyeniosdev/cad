@@ -1,0 +1,43 @@
+# Example acd Manifest — copy to `codeartifact.yaml` and fill in real values.
+#
+#   cp codeartifact.example.yaml codeartifact.yaml
+#   aws sso login --profile <your-profile>
+#   cargo run -- download --manifest codeartifact.yaml --profile <your-profile>
+#
+# ─── Connection Settings (top-level) ────────────────────────────────────────
+# domain        : the CodeArtifact domain.
+#                 discover:  aws codeartifact list-domains --profile <p>
+# domain_owner  : the 12-digit AWS account id that owns the domain.
+#                 MUST be quoted, or YAML parses it as a number.
+#                 discover:  aws sts get-caller-identity --query Account --output text --profile <p>
+# repository    : the repository inside the domain.
+#                 discover:  aws codeartifact list-repositories --domain <d> --profile <p>
+# region        : optional; omit to use the profile's default region.
+domain: my-domain
+domain_owner: "111122223333"
+repository: my-repo
+region: ap-southeast-1
+
+# ─── Packages: one Entry per pinned Package Version ──────────────────────────
+# Each Entry pulls ALL assets of one generic Package Version into `dest`.
+#   namespace : optional; omit the line if the package has no namespace.
+#   package   : the generic package name.
+#   version   : an EXACT pinned version (quoted so "1.4.2" stays a string).
+#   dest      : local folder the assets land in.
+#
+# discover packages/versions/assets:
+#   aws codeartifact list-packages --domain <d> --repository <r> --format generic --profile <p>
+#   aws codeartifact list-package-versions --domain <d> --repository <r> --format generic \
+#       --package <pkg> [--namespace <ns>] --profile <p>
+#   aws codeartifact list-package-version-assets --domain <d> --repository <r> --format generic \
+#       --package <pkg> --package-version <ver> [--namespace <ns>] --profile <p>
+packages:
+  - namespace: mobile
+    package: core-rgp
+    version: "1.4.2"
+    dest: ./artifacts/core-rgp
+
+  # A second Entry without a namespace:
+  # - package: another-package
+  #   version: "2.0.1"
+  #   dest: ./artifacts/another-package
