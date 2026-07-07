@@ -3,7 +3,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -46,5 +48,39 @@ impl FileStore for FakeFileStore {
             .unwrap()
             .insert(dest.to_path_buf(), bytes.to_vec());
         Ok(())
+    }
+}
+
+/// A `PackageSource` that measures how many `fetch_asset` calls run at once, so
+/// tests can assert the Downloader honors its concurrency limit. Each fetch
+/// briefly sleeps to create an overlap window.
+pub struct ConcurrencyProbeSource {
+    pub assets: Vec<Asset>,
+    pub in_flight: AtomicUsize,
+    pub max_in_flight: AtomicUsize,
+}
+
+impl ConcurrencyProbeSource {
+    pub fn new(assets: Vec<Asset>) -> Self {
+        Self {
+            assets,
+            in_flight: AtomicUsize::new(0),
+            max_in_flight: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl PackageSource for ConcurrencyProbeSource {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, FailureKind> {
+        Ok(self.assets.clone())
+    }
+
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, FailureKind> {
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(b"data".to_vec())
     }
 }
