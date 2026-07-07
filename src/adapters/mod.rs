@@ -2,3 +2,5 @@
 //! `aws sso login` subprocess (`Authenticator`), local filesystem
 //! (`FileStore`), and `indicatif`/plain progress (`ProgressReporter`).
 //! See ADR 0004.
+
+pub mod fs;
