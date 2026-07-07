@@ -14,3 +14,9 @@ name = "acd"
 path = "src/main.rs"
 
 [dependencies]
+async-trait = "0.1"
+md-5 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
