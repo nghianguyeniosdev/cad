@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use md5::{Digest, Md5};
 
-use crate::domain::FailureKind;
+use crate::domain::Failure;
 use crate::ports::FileStore;
 
 /// A `FileStore` backed by the local filesystem. Writes go to a `<dest>.part`
@@ -20,20 +20,20 @@ impl FileStore for LocalFileStore {
         Some(hex::encode(hasher.finalize()))
     }
 
-    async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), FailureKind> {
+    async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), Failure> {
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|_| FailureKind::Fatal)?;
+                .map_err(|e| Failure::fatal(format!("create {}: {e}", parent.display())))?;
         }
 
         let part = part_path(dest);
         tokio::fs::write(&part, bytes)
             .await
-            .map_err(|_| FailureKind::Fatal)?;
+            .map_err(|e| Failure::fatal(format!("write {}: {e}", part.display())))?;
         tokio::fs::rename(&part, dest)
             .await
-            .map_err(|_| FailureKind::Fatal)?;
+            .map_err(|e| Failure::fatal(format!("rename to {}: {e}", dest.display())))?;
         Ok(())
     }
 }

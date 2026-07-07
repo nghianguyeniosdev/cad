@@ -128,8 +128,12 @@ fn run_download(
         // Enumerate Phase: print an apt-style summary before downloading.
         let plan = match service.enumerate(&manifest).await {
             Ok(plan) => plan,
-            Err(_) => {
-                let _ = writeln!(out, "error: failed to enumerate assets");
+            Err(failure) => {
+                let _ = writeln!(
+                    out,
+                    "error: failed to enumerate assets: {}",
+                    failure.message
+                );
                 return 1;
             }
         };
@@ -151,8 +155,8 @@ fn run_download(
             summary.cached,
             summary.failed
         );
-        for name in &summary.failed_assets {
-            let _ = writeln!(out, "  failed: {name}");
+        for failed in &summary.failed_assets {
+            let _ = writeln!(out, "  failed: {}: {}", failed.name, failed.reason);
         }
         summary.exit_code()
     })

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::{DownloadPlan, FailureKind, Manifest, PlannedAsset};
+use crate::domain::{DownloadPlan, Failure, Manifest, PlannedAsset};
 use crate::ports::PackageSource;
 
 /// The Enumerate Phase: lists every Entry's Assets and aggregates them into a
@@ -15,7 +15,7 @@ impl Planner {
         Self { source }
     }
 
-    pub async fn plan(&self, manifest: &Manifest) -> Result<DownloadPlan, FailureKind> {
+    pub async fn plan(&self, manifest: &Manifest) -> Result<DownloadPlan, Failure> {
         let mut items = Vec::new();
         for entry in &manifest.packages {
             let assets = self.source.list_assets(entry).await?;

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use acd::domain::{Asset, Entry, FailureKind};
+use acd::domain::{Asset, Entry, Failure};
 use acd::ports::{FileStore, PackageSource};
 
 /// A `PackageSource` that returns a scripted set of Assets for every Entry and
@@ -21,15 +21,15 @@ pub struct FakePackageSource {
 
 #[async_trait]
 impl PackageSource for FakePackageSource {
-    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, FailureKind> {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
         Ok(self.assets.clone())
     }
 
-    async fn fetch_asset(&self, _entry: &Entry, asset: &Asset) -> Result<Vec<u8>, FailureKind> {
+    async fn fetch_asset(&self, _entry: &Entry, asset: &Asset) -> Result<Vec<u8>, Failure> {
         self.bytes
             .get(&asset.name)
             .cloned()
-            .ok_or(FailureKind::Fatal)
+            .ok_or_else(|| Failure::fatal(format!("no bytes for {}", asset.name)))
     }
 }
 
@@ -48,7 +48,7 @@ impl FileStore for FakeFileStore {
         self.existing.get(dest).cloned()
     }
 
-    async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), FailureKind> {
+    async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), Failure> {
         self.written
             .lock()
             .unwrap()
@@ -78,11 +78,11 @@ impl ConcurrencyProbeSource {
 
 #[async_trait]
 impl PackageSource for ConcurrencyProbeSource {
-    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, FailureKind> {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
         Ok(self.assets.clone())
     }
 
-    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, FailureKind> {
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, Failure> {
         let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_in_flight.fetch_max(now, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -114,11 +114,11 @@ impl FlakyFetchSource {
 
 #[async_trait]
 impl PackageSource for FlakyFetchSource {
-    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, FailureKind> {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
         Ok(self.assets.clone())
     }
 
-    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, FailureKind> {
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, Failure> {
         self.fetch_calls.fetch_add(1, Ordering::SeqCst);
         let should_fail = self
             .remaining_failures
@@ -131,9 +131,34 @@ impl PackageSource for FlakyFetchSource {
             })
             .is_ok();
         if should_fail {
-            Err(FailureKind::Transient)
+            Err(Failure::transient("flaky transient failure"))
         } else {
             Ok(self.bytes.clone())
         }
+    }
+}
+
+/// A `PackageSource` whose enumerate (`list_assets`) always fails with a given
+/// message, for testing that the reason is surfaced.
+pub struct EnumerateFailSource {
+    pub message: String,
+}
+
+impl EnumerateFailSource {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl PackageSource for EnumerateFailSource {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
+        Err(Failure::fatal(self.message.clone()))
+    }
+
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, Failure> {
+        unreachable!("enumerate fails before any fetch")
     }
 }

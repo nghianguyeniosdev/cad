@@ -4,7 +4,10 @@ use futures::stream::{self, StreamExt};
 use md5::{Digest, Md5};
 
 use crate::app::{Planner, RetryPolicy};
-use crate::domain::{Asset, AssetOutcome, DownloadPlan, Entry, FailureKind, Manifest, RunSummary};
+use crate::domain::{
+    Asset, AssetOutcome, DownloadPlan, Entry, FailedAsset, Failure, FailureKind, Manifest,
+    RunSummary,
+};
 use crate::ports::{FileStore, PackageSource};
 
 /// The default number of Assets downloaded concurrently.
@@ -42,7 +45,7 @@ impl DownloadService {
 
     /// Run the Enumerate Phase, producing the Download Plan. Aborts (returns an
     /// error) if any Entry's listing fails.
-    pub async fn enumerate(&self, manifest: &Manifest) -> Result<DownloadPlan, FailureKind> {
+    pub async fn enumerate(&self, manifest: &Manifest) -> Result<DownloadPlan, Failure> {
         Planner::new(self.source.clone()).plan(manifest).await
     }
 
@@ -68,9 +71,12 @@ impl DownloadService {
                     summary.bytes += bytes;
                 }
                 AssetOutcome::Cached => summary.cached += 1,
-                AssetOutcome::Failed(_) => {
+                AssetOutcome::Failed(failure) => {
                     summary.failed += 1;
-                    summary.failed_assets.push(name);
+                    summary.failed_assets.push(FailedAsset {
+                        name,
+                        reason: failure.message,
+                    });
                 }
             }
         }
@@ -82,9 +88,12 @@ impl DownloadService {
     pub async fn run(&self, manifest: &Manifest) -> RunSummary {
         match self.enumerate(manifest).await {
             Ok(plan) => self.download(&plan).await,
-            Err(_) => RunSummary {
+            Err(failure) => RunSummary {
                 failed: 1,
-                failed_assets: vec!["enumerate failed".to_string()],
+                failed_assets: vec![FailedAsset {
+                    name: "(enumerate)".to_string(),
+                    reason: failure.message,
+                }],
                 ..RunSummary::default()
             },
         }
@@ -103,13 +112,16 @@ impl DownloadService {
         loop {
             match self.fetch_verify_write(entry, asset, &dest).await {
                 Ok(bytes) => return AssetOutcome::Downloaded(bytes),
-                Err(FailureKind::Transient) if attempt < self.retry.max_retries => {
+                Err(failure)
+                    if failure.kind == FailureKind::Transient
+                        && attempt < self.retry.max_retries =>
+                {
                     attempt += 1;
                     if !self.retry.backoff.is_zero() {
                         tokio::time::sleep(self.retry.backoff).await;
                     }
                 }
-                Err(kind) => return AssetOutcome::Failed(kind),
+                Err(failure) => return AssetOutcome::Failed(failure),
             }
         }
     }
@@ -121,14 +133,17 @@ impl DownloadService {
         entry: &Entry,
         asset: &Asset,
         dest: &std::path::Path,
-    ) -> Result<u64, FailureKind> {
+    ) -> Result<u64, Failure> {
         let bytes = self.source.fetch_asset(entry, asset).await?;
 
         let mut hasher = Md5::new();
         hasher.update(&bytes);
         let actual = hex::encode(hasher.finalize());
         if actual != asset.expected_md5 {
-            return Err(FailureKind::Transient);
+            return Err(Failure::transient(format!(
+                "md5 mismatch for {}: expected {}, got {actual}",
+                asset.name, asset.expected_md5
+            )));
         }
 
         self.files.write(dest, &bytes).await?;

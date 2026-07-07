@@ -19,7 +19,7 @@ pub async fn build_download_service(
     let source: Arc<dyn PackageSource> = Arc::new(
         CodeArtifactSource::new(connection, profile)
             .await
-            .map_err(|_| "failed to initialize AWS CodeArtifact client".to_string())?,
+            .map_err(|failure| format!("failed to initialize AWS client: {}", failure.message))?,
     );
     let files: Arc<dyn FileStore> = Arc::new(LocalFileStore);
 

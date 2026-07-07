@@ -1,4 +1,4 @@
-use crate::domain::FailureKind;
+use crate::domain::Failure;
 
 /// What happened to a single Asset.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7,8 +7,15 @@ pub enum AssetOutcome {
     Downloaded(u64),
     /// Already present with a matching MD5 (Verify-and-Skip).
     Cached,
-    /// Failed after any retries.
-    Failed(FailureKind),
+    /// Failed after any retries; carries the cause.
+    Failed(Failure),
+}
+
+/// A failed Asset in the Run Summary: its name and the human-readable reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailedAsset {
+    pub name: String,
+    pub reason: String,
 }
 
 /// The end-of-run tally that determines the exit code.
@@ -18,8 +25,8 @@ pub struct RunSummary {
     pub cached: usize,
     pub failed: usize,
     pub bytes: u64,
-    /// Names of Assets that failed (for the failed-Asset list).
-    pub failed_assets: Vec<String>,
+    /// The Assets that failed, each with a reason (for the failed-Asset list).
+    pub failed_assets: Vec<FailedAsset>,
 }
 
 impl RunSummary {

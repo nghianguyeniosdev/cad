@@ -1,8 +1,9 @@
 use async_trait::async_trait;
+use aws_sdk_codeartifact::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_codeartifact::types::{HashAlgorithm, PackageFormat};
 use aws_sdk_codeartifact::Client;
 
-use crate::domain::{Asset, ConnectionSettings, Entry, FailureKind};
+use crate::domain::{Asset, ConnectionSettings, Entry, Failure};
 use crate::ports::PackageSource;
 
 /// A `PackageSource` backed by AWS CodeArtifact generic packages, using the
@@ -20,7 +21,7 @@ impl CodeArtifactSource {
     pub async fn new(
         connection: ConnectionSettings,
         profile: Option<String>,
-    ) -> Result<Self, FailureKind> {
+    ) -> Result<Self, Failure> {
         let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
         if let Some(profile) = profile.as_deref() {
             loader = loader.profile_name(profile);
@@ -38,7 +39,7 @@ impl CodeArtifactSource {
 
 #[async_trait]
 impl PackageSource for CodeArtifactSource {
-    async fn list_assets(&self, entry: &Entry) -> Result<Vec<Asset>, FailureKind> {
+    async fn list_assets(&self, entry: &Entry) -> Result<Vec<Asset>, Failure> {
         let mut request = self
             .client
             .list_package_version_assets()
@@ -52,7 +53,13 @@ impl PackageSource for CodeArtifactSource {
             request = request.namespace(namespace);
         }
 
-        let response = request.send().await.map_err(|_| FailureKind::Fatal)?;
+        let response = request.send().await.map_err(|err| {
+            Failure::fatal(format!(
+                "list assets for {}: {}",
+                describe_entry(entry),
+                sdk_message(&err)
+            ))
+        })?;
 
         let assets = response
             .assets()
@@ -70,7 +77,7 @@ impl PackageSource for CodeArtifactSource {
         Ok(assets)
     }
 
-    async fn fetch_asset(&self, entry: &Entry, asset: &Asset) -> Result<Vec<u8>, FailureKind> {
+    async fn fetch_asset(&self, entry: &Entry, asset: &Asset) -> Result<Vec<u8>, Failure> {
         let mut request = self
             .client
             .get_package_version_asset()
@@ -85,13 +92,44 @@ impl PackageSource for CodeArtifactSource {
             request = request.namespace(namespace);
         }
 
-        let response = request.send().await.map_err(|_| FailureKind::Fatal)?;
+        let response = request.send().await.map_err(|err| {
+            Failure::fatal(format!(
+                "fetch {} of {}: {}",
+                asset.name,
+                describe_entry(entry),
+                sdk_message(&err)
+            ))
+        })?;
         let bytes = response
             .asset
             .collect()
             .await
-            .map_err(|_| FailureKind::Transient)?
+            .map_err(|err| Failure::transient(format!("read {}: {err}", asset.name)))?
             .into_bytes();
         Ok(bytes.to_vec())
+    }
+}
+
+/// Extract the concise service-error message from an SDK error, falling back to
+/// the full context for non-service (dispatch/timeout) errors.
+fn sdk_message<E, R>(err: &SdkError<E, R>) -> String
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug,
+{
+    match err
+        .as_service_error()
+        .and_then(ProvideErrorMetadata::message)
+    {
+        Some(message) => message.to_string(),
+        None => DisplayErrorContext(err).to_string(),
+    }
+}
+
+/// A short "namespace/package@version" description of an Entry for messages.
+fn describe_entry(entry: &Entry) -> String {
+    match &entry.namespace {
+        Some(ns) => format!("{ns}/{}@{}", entry.package, entry.version),
+        None => format!("{}@{}", entry.package, entry.version),
     }
 }

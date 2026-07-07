@@ -139,7 +139,10 @@ async fn asset_failing_md5_is_not_committed_and_run_fails() {
     assert_eq!(summary.failed, 1);
     assert_eq!(summary.exit_code(), 1, "any Asset failure exits non-zero");
     assert!(
-        summary.failed_assets.iter().any(|n| n == "corrupt.bin"),
+        summary
+            .failed_assets
+            .iter()
+            .any(|f| f.name == "corrupt.bin"),
         "the failed Asset should be named in the summary"
     );
     assert!(
@@ -322,5 +325,47 @@ async fn transient_failures_exhaust_retries_then_fail() {
         source.fetch_calls.load(std::sync::atomic::Ordering::SeqCst),
         4,
         "1 initial attempt + 3 retries"
+    );
+}
+
+#[tokio::test]
+async fn fetch_failure_reason_is_reported() {
+    // Empty bytes map -> the source fails the fetch with "no bytes for ghost.bin".
+    let source = Arc::new(FakePackageSource {
+        assets: one_asset("ghost.bin", "5d41402abc4b2a76b9719d911017c592"),
+        bytes: HashMap::new(),
+    });
+    let files = Arc::new(FakeFileStore::default());
+    let service = DownloadService::new(source, files).with_retry_policy(zero_backoff());
+
+    let summary = service.run(&single_entry_manifest()).await;
+
+    assert_eq!(summary.failed, 1);
+    let failed = &summary.failed_assets[0];
+    assert_eq!(failed.name, "ghost.bin");
+    assert!(
+        failed.reason.contains("no bytes for ghost.bin"),
+        "reason should carry the underlying message, got: {:?}",
+        failed.reason
+    );
+}
+
+#[tokio::test]
+async fn enumerate_failure_reason_is_reported() {
+    let source = Arc::new(fakes::EnumerateFailSource::new(
+        "ValidationException: 'namespace' is required when 'format' is 'generic'",
+    ));
+    let files = Arc::new(FakeFileStore::default());
+    let service = DownloadService::new(source, files);
+
+    let summary = service.run(&single_entry_manifest()).await;
+
+    assert_eq!(summary.failed, 1);
+    assert!(
+        summary.failed_assets[0]
+            .reason
+            .contains("'namespace' is required"),
+        "enumerate reason should carry the underlying message, got: {:?}",
+        summary.failed_assets[0].reason
     );
 }

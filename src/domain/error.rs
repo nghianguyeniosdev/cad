@@ -21,3 +21,33 @@ pub enum FailureKind {
     /// A non-recoverable error (not found, bad request, exhausted retries).
     Fatal,
 }
+
+/// A failure with both its control-flow classification (`kind`) and a
+/// human-readable cause (`message`). Adapters populate `message` with the
+/// underlying error (e.g. the AWS SDK message) so the user sees the real reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub kind: FailureKind,
+    pub message: String,
+}
+
+impl Failure {
+    pub fn new(kind: FailureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn transient(message: impl Into<String>) -> Self {
+        Self::new(FailureKind::Transient, message)
+    }
+
+    pub fn fatal(message: impl Into<String>) -> Self {
+        Self::new(FailureKind::Fatal, message)
+    }
+
+    pub fn auth_expired(message: impl Into<String>) -> Self {
+        Self::new(FailureKind::AuthExpired, message)
+    }
+}

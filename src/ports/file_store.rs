@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::path::Path;
 
-use crate::domain::FailureKind;
+use crate::domain::Failure;
 
 /// The filesystem seam. The adapter is responsible for atomicity (write to a
 /// `.part` temp file, then rename into place); callers only ever hand it bytes
@@ -13,5 +13,5 @@ pub trait FileStore: Send + Sync {
     async fn existing_md5(&self, dest: &Path) -> Option<String>;
 
     /// Persist verified bytes at `dest`, atomically.
-    async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), FailureKind>;
+    async fn write(&self, dest: &Path, bytes: &[u8]) -> Result<(), Failure>;
 }
