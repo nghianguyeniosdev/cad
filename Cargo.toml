@@ -1,0 +1,16 @@
+[package]
+name = "acd"
+version = "0.1.0"
+edition = "2021"
+description = "Download and verify AWS CodeArtifact generic-package assets"
+license = "MIT"
+
+[lib]
+name = "acd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "acd"
+path = "src/main.rs"
+
+[dependencies]
