@@ -19,3 +19,26 @@ fn version_command_prints_version_and_exits_zero() {
         "`acd version` output should contain the crate version, got: {output:?}"
     );
 }
+
+#[test]
+fn unknown_command_exits_nonzero() {
+    let (code, _output) = run_capture(&["acd", "bogus"]);
+
+    assert_ne!(code, 0, "an unrecognized command should exit non-zero");
+}
+
+#[test]
+fn stub_subcommands_are_recognized_but_not_yet_implemented() {
+    for cmd in ["download", "doctor", "init"] {
+        let (code, output) = run_capture(&["acd", cmd]);
+
+        assert_eq!(
+            code, 3,
+            "`acd {cmd}` should be a recognized command reporting not-implemented (exit 3)"
+        );
+        assert!(
+            output.to_lowercase().contains("not implemented"),
+            "`acd {cmd}` should say it is not implemented, got: {output:?}"
+        );
+    }
+}
