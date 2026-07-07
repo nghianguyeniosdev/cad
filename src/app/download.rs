@@ -8,7 +8,7 @@ use crate::domain::{
     Asset, AssetOutcome, DownloadPlan, Entry, FailedAsset, Failure, FailureKind, Manifest,
     RunSummary,
 };
-use crate::ports::{FileStore, PackageSource};
+use crate::ports::{FileStore, NoopReporter, PackageSource, ProgressReporter};
 
 /// The default number of Assets downloaded concurrently.
 pub const DEFAULT_CONCURRENCY: usize = 10;
@@ -17,6 +17,7 @@ pub const DEFAULT_CONCURRENCY: usize = 10;
 pub struct DownloadService {
     source: Arc<dyn PackageSource>,
     files: Arc<dyn FileStore>,
+    reporter: Arc<dyn ProgressReporter>,
     concurrency: usize,
     retry: RetryPolicy,
 }
@@ -26,6 +27,7 @@ impl DownloadService {
         Self {
             source,
             files,
+            reporter: Arc::new(NoopReporter),
             concurrency: DEFAULT_CONCURRENCY,
             retry: RetryPolicy::default(),
         }
@@ -43,6 +45,12 @@ impl DownloadService {
         self
     }
 
+    /// Set the progress reporter (defaults to a no-op reporter).
+    pub fn with_reporter(mut self, reporter: Arc<dyn ProgressReporter>) -> Self {
+        self.reporter = reporter;
+        self
+    }
+
     /// Run the Enumerate Phase, producing the Download Plan. Aborts (returns an
     /// error) if any Entry's listing fails.
     pub async fn enumerate(&self, manifest: &Manifest) -> Result<DownloadPlan, Failure> {
@@ -52,11 +60,13 @@ impl DownloadService {
     /// Run the Download Phase over a plan, fetching Assets concurrently (bounded
     /// by the configured concurrency), verifying MD5, and returning a summary.
     pub async fn download(&self, plan: &DownloadPlan) -> RunSummary {
-        let outcomes = stream::iter(plan.items.iter())
-            .map(|item| async move {
+        self.reporter.start(plan.total_files(), plan.total_bytes());
+
+        let outcomes = stream::iter(plan.items.iter().enumerate())
+            .map(|(index, item)| async move {
                 (
                     item.asset.name.clone(),
-                    self.download_one(&item.entry, &item.asset).await,
+                    self.download_one(index, &item.entry, &item.asset).await,
                 )
             })
             .buffer_unordered(self.concurrency)
@@ -80,6 +90,7 @@ impl DownloadService {
                 }
             }
         }
+        self.reporter.finish(&summary);
         summary
     }
 
@@ -100,17 +111,35 @@ impl DownloadService {
     }
 
     /// Fetch one Asset, verify its MD5, and persist it. Skips (as `Cached`) when
-    /// a file already present at `dest` matches the expected MD5.
-    async fn download_one(&self, entry: &Entry, asset: &Asset) -> AssetOutcome {
+    /// a file already present at `dest` matches the expected MD5. Reports its
+    /// lifecycle to the progress reporter.
+    async fn download_one(&self, index: usize, entry: &Entry, asset: &Asset) -> AssetOutcome {
+        self.reporter.asset_started(index, &asset.name, asset.size);
+
         let dest = entry.dest.join(&asset.name);
+        let outcome = if self.files.existing_md5(&dest).await.as_deref()
+            == Some(asset.expected_md5.as_str())
+        {
+            AssetOutcome::Cached
+        } else {
+            self.download_with_retry(index, entry, asset, &dest).await
+        };
 
-        if self.files.existing_md5(&dest).await.as_deref() == Some(asset.expected_md5.as_str()) {
-            return AssetOutcome::Cached;
-        }
+        self.reporter.asset_finished(index, &outcome);
+        outcome
+    }
 
+    /// Attempt `fetch_verify_write`, retrying `Transient` failures per policy.
+    async fn download_with_retry(
+        &self,
+        index: usize,
+        entry: &Entry,
+        asset: &Asset,
+        dest: &std::path::Path,
+    ) -> AssetOutcome {
         let mut attempt = 0;
         loop {
-            match self.fetch_verify_write(entry, asset, &dest).await {
+            match self.fetch_verify_write(index, entry, asset, dest).await {
                 Ok(bytes) => return AssetOutcome::Downloaded(bytes),
                 Err(failure)
                     if failure.kind == FailureKind::Transient
@@ -130,14 +159,22 @@ impl DownloadService {
     /// a `Transient` failure (a corrupt transfer is retryable).
     async fn fetch_verify_write(
         &self,
+        index: usize,
         entry: &Entry,
         asset: &Asset,
         dest: &std::path::Path,
     ) -> Result<u64, Failure> {
-        let bytes = self.source.fetch_asset(entry, asset).await?;
+        let mut stream = self.source.fetch_asset(entry, asset).await?;
 
         let mut hasher = Md5::new();
-        hasher.update(&bytes);
+        let mut buffer = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            hasher.update(&chunk);
+            self.reporter.asset_advanced(index, chunk.len() as u64);
+            buffer.extend_from_slice(&chunk);
+        }
+
         let actual = hex::encode(hasher.finalize());
         if actual != asset.expected_md5 {
             return Err(Failure::transient(format!(
@@ -146,7 +183,7 @@ impl DownloadService {
             )));
         }
 
-        self.files.write(dest, &bytes).await?;
-        Ok(bytes.len() as u64)
+        self.files.write(dest, &buffer).await?;
+        Ok(buffer.len() as u64)
     }
 }

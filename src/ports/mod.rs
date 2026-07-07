@@ -6,6 +6,8 @@
 
 pub mod file_store;
 pub mod package_source;
+pub mod progress;
 
 pub use file_store::FileStore;
-pub use package_source::PackageSource;
+pub use package_source::{AssetStream, PackageSource};
+pub use progress::{NoopReporter, ProgressReporter};

@@ -10,7 +10,21 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use acd::domain::{Asset, Entry, Failure};
-use acd::ports::{FileStore, PackageSource};
+use acd::ports::{AssetStream, FileStore, PackageSource};
+
+/// Wrap owned bytes as a single-chunk `AssetStream`.
+fn one_chunk(bytes: Vec<u8>) -> AssetStream {
+    Box::pin(futures::stream::once(async move { Ok(bytes) }))
+}
+
+/// Wrap owned bytes as a multi-chunk `AssetStream` of `chunk_size` bytes each.
+pub fn chunked_stream(bytes: Vec<u8>, chunk_size: usize) -> AssetStream {
+    let chunks: Vec<Vec<u8>> = bytes
+        .chunks(chunk_size.max(1))
+        .map(<[u8]>::to_vec)
+        .collect();
+    Box::pin(futures::stream::iter(chunks.into_iter().map(Ok)))
+}
 
 /// A `PackageSource` that returns a scripted set of Assets for every Entry and
 /// serves each Asset's bytes from an in-memory map (missing name -> `Fatal`).
@@ -25,11 +39,11 @@ impl PackageSource for FakePackageSource {
         Ok(self.assets.clone())
     }
 
-    async fn fetch_asset(&self, _entry: &Entry, asset: &Asset) -> Result<Vec<u8>, Failure> {
-        self.bytes
-            .get(&asset.name)
-            .cloned()
-            .ok_or_else(|| Failure::fatal(format!("no bytes for {}", asset.name)))
+    async fn fetch_asset(&self, _entry: &Entry, asset: &Asset) -> Result<AssetStream, Failure> {
+        match self.bytes.get(&asset.name) {
+            Some(bytes) => Ok(one_chunk(bytes.clone())),
+            None => Err(Failure::fatal(format!("no bytes for {}", asset.name))),
+        }
     }
 }
 
@@ -82,12 +96,12 @@ impl PackageSource for ConcurrencyProbeSource {
         Ok(self.assets.clone())
     }
 
-    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, Failure> {
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
         let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_in_flight.fetch_max(now, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(20)).await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        Ok(b"data".to_vec())
+        Ok(one_chunk(b"data".to_vec()))
     }
 }
 
@@ -118,7 +132,7 @@ impl PackageSource for FlakyFetchSource {
         Ok(self.assets.clone())
     }
 
-    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, Failure> {
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
         self.fetch_calls.fetch_add(1, Ordering::SeqCst);
         let should_fail = self
             .remaining_failures
@@ -133,7 +147,7 @@ impl PackageSource for FlakyFetchSource {
         if should_fail {
             Err(Failure::transient("flaky transient failure"))
         } else {
-            Ok(self.bytes.clone())
+            Ok(one_chunk(self.bytes.clone()))
         }
     }
 }
@@ -158,7 +172,60 @@ impl PackageSource for EnumerateFailSource {
         Err(Failure::fatal(self.message.clone()))
     }
 
-    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<Vec<u8>, Failure> {
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
         unreachable!("enumerate fails before any fetch")
     }
+}
+
+/// A `PackageSource` that streams one Asset's bytes in fixed-size chunks, so
+/// tests can assert byte-level progress reporting.
+pub struct ChunkedByteSource {
+    pub assets: Vec<Asset>,
+    pub bytes: Vec<u8>,
+    pub chunk_size: usize,
+}
+
+#[async_trait]
+impl PackageSource for ChunkedByteSource {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
+        Ok(self.assets.clone())
+    }
+
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
+        Ok(chunked_stream(self.bytes.clone(), self.chunk_size))
+    }
+}
+
+/// A `ProgressReporter` that records the events it receives.
+#[derive(Default)]
+pub struct RecordingReporter {
+    pub started: Mutex<Option<(usize, u64)>>,
+    pub advanced: Mutex<HashMap<usize, u64>>,
+    pub finished: Mutex<Vec<(usize, String)>>,
+}
+
+impl acd::ports::ProgressReporter for RecordingReporter {
+    fn start(&self, total_files: usize, total_bytes: u64) {
+        *self.started.lock().unwrap() = Some((total_files, total_bytes));
+    }
+
+    fn asset_started(&self, _index: usize, _name: &str, _size: u64) {}
+
+    fn asset_advanced(&self, index: usize, bytes: u64) {
+        *self.advanced.lock().unwrap().entry(index).or_default() += bytes;
+    }
+
+    fn asset_finished(&self, index: usize, outcome: &acd::domain::AssetOutcome) {
+        let label = match outcome {
+            acd::domain::AssetOutcome::Downloaded(_) => "downloaded",
+            acd::domain::AssetOutcome::Cached => "cached",
+            acd::domain::AssetOutcome::Failed(_) => "failed",
+        };
+        self.finished
+            .lock()
+            .unwrap()
+            .push((index, label.to_string()));
+    }
+
+    fn finish(&self, _summary: &acd::domain::RunSummary) {}
 }

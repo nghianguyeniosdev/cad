@@ -2,9 +2,11 @@ use async_trait::async_trait;
 use aws_sdk_codeartifact::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_codeartifact::types::{HashAlgorithm, PackageFormat};
 use aws_sdk_codeartifact::Client;
+use futures::stream::StreamExt;
+use tokio_util::io::ReaderStream;
 
 use crate::domain::{Asset, ConnectionSettings, Entry, Failure};
-use crate::ports::PackageSource;
+use crate::ports::{AssetStream, PackageSource};
 
 /// A `PackageSource` backed by AWS CodeArtifact generic packages, using the
 /// AWS SDK for Rust. Credentials/region come from the resolved AWS profile
@@ -77,7 +79,7 @@ impl PackageSource for CodeArtifactSource {
         Ok(assets)
     }
 
-    async fn fetch_asset(&self, entry: &Entry, asset: &Asset) -> Result<Vec<u8>, Failure> {
+    async fn fetch_asset(&self, entry: &Entry, asset: &Asset) -> Result<AssetStream, Failure> {
         let mut request = self
             .client
             .get_package_version_asset()
@@ -100,13 +102,14 @@ impl PackageSource for CodeArtifactSource {
                 sdk_message(&err)
             ))
         })?;
-        let bytes = response
-            .asset
-            .collect()
-            .await
-            .map_err(|err| Failure::transient(format!("read {}: {err}", asset.name)))?
-            .into_bytes();
-        Ok(bytes.to_vec())
+
+        let asset_name = asset.name.clone();
+        let stream = ReaderStream::new(response.asset.into_async_read()).map(move |chunk| {
+            chunk
+                .map(|bytes| bytes.to_vec())
+                .map_err(|err| Failure::transient(format!("read {asset_name}: {err}")))
+        });
+        Ok(Box::pin(stream))
     }
 }
 

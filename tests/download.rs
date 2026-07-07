@@ -369,3 +369,48 @@ async fn enumerate_failure_reason_is_reported() {
         summary.failed_assets[0].reason
     );
 }
+
+#[tokio::test]
+async fn reports_plan_totals_at_start() {
+    let bytes = HashMap::from([
+        ("a.bin".to_string(), b"hello".to_vec()),
+        ("b.bin".to_string(), b"world".to_vec()),
+    ]);
+    let source = Arc::new(FakePackageSource {
+        assets: two_asset_list(),
+        bytes,
+    });
+    let files = Arc::new(FakeFileStore::default());
+    let reporter = Arc::new(fakes::RecordingReporter::default());
+    let service = DownloadService::new(source, files).with_reporter(reporter.clone());
+
+    let _ = service.run(&single_entry_manifest()).await;
+
+    // One Entry -> the two assets (5 + 5 bytes).
+    assert_eq!(*reporter.started.lock().unwrap(), Some((2, 10)));
+}
+
+#[tokio::test]
+async fn reports_streamed_bytes_and_completion() {
+    let source = Arc::new(fakes::ChunkedByteSource {
+        assets: one_asset("a.bin", "5d41402abc4b2a76b9719d911017c592"),
+        bytes: b"hello".to_vec(),
+        chunk_size: 2,
+    });
+    let files = Arc::new(FakeFileStore::default());
+    let reporter = Arc::new(fakes::RecordingReporter::default());
+    let service = DownloadService::new(source, files).with_reporter(reporter.clone());
+
+    let summary = service.run(&single_entry_manifest()).await;
+
+    assert_eq!(summary.downloaded, 1);
+    assert_eq!(
+        reporter.advanced.lock().unwrap().get(&0).copied(),
+        Some(5),
+        "per-chunk advances should sum to the asset size"
+    );
+    assert_eq!(
+        reporter.finished.lock().unwrap().as_slice(),
+        &[(0, "downloaded".to_string())]
+    );
+}
