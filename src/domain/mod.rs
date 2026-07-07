@@ -7,5 +7,5 @@ pub mod outcome;
 
 pub use asset::Asset;
 pub use error::FailureKind;
-pub use manifest::{ConnectionSettings, Entry, Manifest};
+pub use manifest::{ConnectionSettings, Entry, Manifest, ManifestError};
 pub use outcome::RunSummary;
