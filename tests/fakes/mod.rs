@@ -1,5 +1,9 @@
 //! In-memory fakes for the ports, used to drive the app pipeline end-to-end
 //! without touching AWS.
+//!
+//! Shared by multiple integration-test crates; each uses a different subset, so
+//! unused-in-one-crate items are expected.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -228,4 +232,38 @@ impl acd::ports::ProgressReporter for RecordingReporter {
     }
 
     fn finish(&self, _summary: &acd::domain::RunSummary) {}
+}
+
+/// A fake `Authenticator`: reports a scripted status and records login calls,
+/// optionally failing the login.
+pub struct FakeAuthenticator {
+    pub status: acd::ports::SessionStatus,
+    pub login_fails: bool,
+    pub login_calls: AtomicUsize,
+}
+
+impl FakeAuthenticator {
+    pub fn new(status: acd::ports::SessionStatus, login_fails: bool) -> Self {
+        Self {
+            status,
+            login_fails,
+            login_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl acd::ports::Authenticator for FakeAuthenticator {
+    async fn session_status(&self, _profile: Option<&str>) -> acd::ports::SessionStatus {
+        self.status
+    }
+
+    async fn login(&self, _profile: Option<&str>) -> Result<(), Failure> {
+        self.login_calls.fetch_add(1, Ordering::SeqCst);
+        if self.login_fails {
+            Err(Failure::fatal("aws sso login failed"))
+        } else {
+            Ok(())
+        }
+    }
 }

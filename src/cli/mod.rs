@@ -12,6 +12,8 @@ use crate::domain::Manifest;
 const EXIT_USAGE: i32 = 2;
 /// Exit code for a recognized command that has no implementation yet.
 const EXIT_NOT_IMPLEMENTED: i32 = 3;
+/// Exit code for an environment/precondition failure (e.g. SSO login failed).
+const EXIT_ENV: i32 = 2;
 
 #[derive(Parser)]
 #[command(
@@ -111,6 +113,13 @@ fn run_download(
     };
 
     runtime.block_on(async {
+        // Preflight: ensure a usable SSO session, auto-logging in if needed.
+        let authenticator = crate::adapters::sso::SsoAuthenticator;
+        if let Err(failure) = crate::app::ensure_session(&authenticator, profile.as_deref()).await {
+            let _ = writeln!(out, "error: {}", failure.message);
+            return EXIT_ENV;
+        }
+
         let service = match crate::wiring::build_download_service(
             manifest.connection.clone(),
             profile,

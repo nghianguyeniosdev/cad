@@ -4,7 +4,9 @@
 pub mod download;
 pub mod planner;
 pub mod retry;
+pub mod session;
 
 pub use download::DownloadService;
 pub use planner::Planner;
 pub use retry::RetryPolicy;
+pub use session::ensure_session;
