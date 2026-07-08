@@ -26,17 +26,3 @@ fn unknown_command_exits_nonzero() {
 
     assert_ne!(code, 0, "an unrecognized command should exit non-zero");
 }
-
-#[test]
-fn doctor_is_recognized_but_not_yet_implemented() {
-    let (code, output) = run_capture(&["acd", "doctor"]);
-
-    assert_eq!(
-        code, 3,
-        "`acd doctor` should be a recognized command reporting not-implemented (exit 3)"
-    );
-    assert!(
-        output.to_lowercase().contains("not implemented"),
-        "`acd doctor` should say it is not implemented, got: {output:?}"
-    );
-}

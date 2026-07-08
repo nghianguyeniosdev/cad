@@ -10,9 +10,8 @@ use crate::domain::Manifest;
 
 /// Exit code for a usage error (unrecognized command / bad invocation).
 const EXIT_USAGE: i32 = 2;
-/// Exit code for a recognized command that has no implementation yet.
-const EXIT_NOT_IMPLEMENTED: i32 = 3;
-/// Exit code for an environment/precondition failure (e.g. SSO login failed).
+/// Exit code for an environment/precondition failure (Doctor check failed,
+/// SSO login failed, ...).
 const EXIT_ENV: i32 = 2;
 
 #[derive(Parser)]
@@ -42,7 +41,11 @@ enum Command {
         concurrency: usize,
     },
     /// Check the local environment.
-    Doctor,
+    Doctor {
+        /// AWS profile to check for.
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Scaffold a starter Manifest (`codeartifact.yaml`).
     Init {
         /// Overwrite an existing `codeartifact.yaml`.
@@ -73,8 +76,43 @@ pub fn run(args: impl IntoIterator<Item = String>, out: &mut dyn Write) -> i32 {
             profile,
             concurrency,
         } => run_download(manifest, profile, concurrency, out),
-        Command::Doctor => not_implemented("doctor", out),
+        Command::Doctor { profile } => run_doctor(profile, out),
         Command::Init { force } => run_init(force, out),
+    }
+}
+
+fn run_doctor(profile: Option<String>, out: &mut dyn Write) -> i32 {
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            let _ = writeln!(out, "error: failed to start async runtime: {err}");
+            return 1;
+        }
+    };
+    runtime.block_on(async {
+        // Standalone doctor checks the current directory for writability.
+        let checks = crate::doctor::environment_checks(profile, vec![PathBuf::from(".")]);
+        let report = crate::doctor::run_all(&checks).await;
+        print_report(&report, out);
+        if report.ok() {
+            0
+        } else {
+            EXIT_ENV
+        }
+    })
+}
+
+/// Print a Doctor report: `✓`/`✗` per check, with the hint on failures.
+fn print_report(report: &crate::doctor::DoctorReport, out: &mut dyn Write) {
+    for result in &report.results {
+        match &result.outcome {
+            crate::doctor::CheckOutcome::Pass => {
+                let _ = writeln!(out, "  ✓ {}", result.name);
+            }
+            crate::doctor::CheckOutcome::Fail { hint } => {
+                let _ = writeln!(out, "  ✗ {} — {hint}", result.name);
+            }
+        }
     }
 }
 
@@ -90,11 +128,6 @@ fn run_init(force: bool, out: &mut dyn Write) -> i32 {
             EXIT_USAGE
         }
     }
-}
-
-fn not_implemented(command: &str, out: &mut dyn Write) -> i32 {
-    let _ = writeln!(out, "acd {command}: not implemented yet");
-    EXIT_NOT_IMPLEMENTED
 }
 
 fn run_download(
@@ -131,7 +164,16 @@ fn run_download(
     };
 
     runtime.block_on(async {
-        // Preflight: ensure a usable SSO session, auto-logging in if needed.
+        // Preflight 1: Doctor — aws CLI present + v2, profile exists, dests writable.
+        let dests: Vec<PathBuf> = manifest.packages.iter().map(|e| e.dest.clone()).collect();
+        let checks = crate::doctor::environment_checks(profile.clone(), dests);
+        let report = crate::doctor::run_all(&checks).await;
+        if !report.ok() {
+            print_report(&report, out);
+            return EXIT_ENV;
+        }
+
+        // Preflight 2: ensure a usable SSO session, auto-logging in if needed.
         // The same authenticator powers mid-run re-login recovery.
         let authenticator: std::sync::Arc<dyn crate::ports::Authenticator> =
             std::sync::Arc::new(crate::adapters::sso::SsoAuthenticator);
