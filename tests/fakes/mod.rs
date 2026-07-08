@@ -14,7 +14,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use acd::domain::{Asset, Entry, Failure};
-use acd::ports::{AssetStream, Authenticator, FileStore, PackageSource, SessionStatus};
+use acd::ports::{
+    AssetListCache, AssetListKey, AssetStream, Authenticator, FileStore, PackageSource,
+    SessionStatus,
+};
 
 /// Wrap owned bytes as a single-chunk `AssetStream`.
 fn one_chunk(bytes: Vec<u8>) -> AssetStream {
@@ -380,5 +383,52 @@ impl PackageSource for ListConcurrencyProbeSource {
 
     async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
         unreachable!("enumerate-only probe")
+    }
+}
+
+/// A `PackageSource` that counts `list_assets` calls (for cache hit/miss tests).
+pub struct ListCountingSource {
+    pub assets: Vec<Asset>,
+    pub list_calls: AtomicUsize,
+}
+
+impl ListCountingSource {
+    pub fn new(assets: Vec<Asset>) -> Self {
+        Self {
+            assets,
+            list_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl PackageSource for ListCountingSource {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(self.assets.clone())
+    }
+
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
+        unreachable!("list-counting source is enumerate-only")
+    }
+}
+
+/// An in-memory `AssetListCache`.
+#[derive(Default)]
+pub struct InMemoryAssetListCache {
+    map: Mutex<HashMap<AssetListKey, Vec<Asset>>>,
+}
+
+#[async_trait]
+impl AssetListCache for InMemoryAssetListCache {
+    async fn get(&self, key: &AssetListKey) -> Option<Vec<Asset>> {
+        self.map.lock().unwrap().get(key).cloned()
+    }
+
+    async fn put(&self, key: &AssetListKey, assets: &[Asset]) {
+        self.map
+            .lock()
+            .unwrap()
+            .insert(key.clone(), assets.to_vec());
     }
 }

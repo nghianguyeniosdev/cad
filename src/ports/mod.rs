@@ -4,11 +4,13 @@
 //! Remaining seams (`Authenticator`, `ProgressReporter`) are introduced by the
 //! slices that first consume them, so their shapes are driven by real tests.
 
+pub mod asset_list_cache;
 pub mod authenticator;
 pub mod file_store;
 pub mod package_source;
 pub mod progress;
 
+pub use asset_list_cache::{AssetListCache, AssetListKey};
 pub use authenticator::{Authenticator, SessionStatus};
 pub use file_store::FileStore;
 pub use package_source::{AssetStream, PackageSource};

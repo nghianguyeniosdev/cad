@@ -4,6 +4,7 @@
 //! See ADR 0004.
 
 pub mod aws;
+pub mod cache;
 pub mod fs;
 pub mod progress;
 pub mod sso;
