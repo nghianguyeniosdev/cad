@@ -8,6 +8,8 @@ pub mod plan;
 
 pub use asset::Asset;
 pub use error::{Failure, FailureKind};
-pub use manifest::{ConnectionSettings, Entry, Manifest, ManifestError};
+pub use manifest::{
+    ConnectionSettings, Entry, Layout, Manifest, ManifestError, RawEntry, RawManifest,
+};
 pub use outcome::{AssetOutcome, FailedAsset, RunSummary};
 pub use plan::{DownloadPlan, PlannedAsset};

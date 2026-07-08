@@ -455,3 +455,41 @@ async fn enumerate_lists_entries_concurrently() {
         "must not exceed the concurrency bound; saw {max}"
     );
 }
+
+#[tokio::test]
+async fn versioned_manifest_downloads_to_derived_paths() {
+    let yaml = r#"
+layout: versioned
+domain: d
+domain_owner: "111122223333"
+repository: r
+packages:
+  - namespace: com.tymex
+    package: UpFrontCheck
+    version: "1.64.0"
+"#;
+    let manifest = acd::domain::RawManifest::from_yaml(yaml)
+        .unwrap()
+        .resolve(std::path::Path::new("/cache"))
+        .unwrap();
+
+    let assets = vec![Asset {
+        name: "UpFrontCheck.zip".into(),
+        size: 5,
+        expected_md5: "5d41402abc4b2a76b9719d911017c592".into(), // md5("hello")
+    }];
+    let bytes = HashMap::from([("UpFrontCheck.zip".to_string(), b"hello".to_vec())]);
+    let source = Arc::new(FakePackageSource { assets, bytes });
+    let files = Arc::new(FakeFileStore::default());
+    let service = DownloadService::new(source, files.clone());
+
+    let summary = service.run(&manifest).await;
+
+    assert_eq!(summary.downloaded, 1);
+    assert!(
+        files.written.lock().unwrap().contains_key(&PathBuf::from(
+            "/cache/UpFrontCheck/1.64.0/UpFrontCheck.zip"
+        )),
+        "asset should land at <cache_root>/<package>/<version>/<asset>"
+    );
+}

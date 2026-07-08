@@ -1,11 +1,14 @@
+use std::path::Path;
+
 use acd::app::init::{init_manifest, render_template};
-use acd::domain::Manifest;
+use acd::domain::RawManifest;
 
 #[test]
 fn template_parses_as_a_manifest_with_an_example_entry() {
     let template = render_template();
-    let manifest =
-        Manifest::from_yaml(&template).expect("the init template must parse as a Manifest");
+    let manifest = RawManifest::from_yaml(&template)
+        .and_then(|raw| raw.resolve(Path::new("/unused")))
+        .expect("the init template must parse and resolve as a Manifest");
 
     assert!(
         !manifest.packages.is_empty(),

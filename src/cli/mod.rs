@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::domain::Manifest;
+use crate::domain::RawManifest;
 
 /// Exit code for a usage error (unrecognized command / bad invocation).
 const EXIT_USAGE: i32 = 2;
@@ -42,6 +42,9 @@ enum Command {
         /// Ignore any cached asset lists and re-query CodeArtifact.
         #[arg(long)]
         refresh_cache: bool,
+        /// Cache Root for versioned layout (overrides ~/.acd/config.yml).
+        #[arg(long)]
+        cache_root: Option<String>,
     },
     /// Check the local environment.
     Doctor {
@@ -79,7 +82,15 @@ pub fn run(args: impl IntoIterator<Item = String>, out: &mut dyn Write) -> i32 {
             profile,
             concurrency,
             refresh_cache,
-        } => run_download(manifest, profile, concurrency, refresh_cache, out),
+            cache_root,
+        } => run_download(
+            manifest,
+            profile,
+            concurrency,
+            refresh_cache,
+            cache_root,
+            out,
+        ),
         Command::Doctor { profile } => run_doctor(profile, out),
         Command::Init { force } => run_init(force, out),
     }
@@ -139,6 +150,7 @@ fn run_download(
     profile: Option<String>,
     concurrency: usize,
     refresh_cache: bool,
+    cache_root: Option<String>,
     out: &mut dyn Write,
 ) -> i32 {
     let yaml = match std::fs::read_to_string(&manifest_path) {
@@ -152,7 +164,18 @@ fn run_download(
             return EXIT_USAGE;
         }
     };
-    let manifest = match Manifest::from_yaml(&yaml) {
+
+    // Resolve the Cache Root (flag > ~/.acd/config.yml > default) for versioned
+    // layout, then parse + resolve the Manifest's dests.
+    let config_path = crate::config::default_config_path();
+    let cache_root = match crate::config::resolve_cache_root(cache_root, &config_path) {
+        Ok(root) => root,
+        Err(err) => {
+            let _ = writeln!(out, "error: {err}");
+            return EXIT_ENV;
+        }
+    };
+    let manifest = match RawManifest::from_yaml(&yaml).and_then(|raw| raw.resolve(&cache_root)) {
         Ok(manifest) => manifest,
         Err(err) => {
             let _ = writeln!(out, "error: {err}");
