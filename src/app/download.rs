@@ -70,7 +70,9 @@ impl DownloadService {
     /// Run the Enumerate Phase, producing the Download Plan. Aborts (returns an
     /// error) if any Entry's listing fails.
     pub async fn enumerate(&self, manifest: &Manifest) -> Result<DownloadPlan, Failure> {
-        Planner::new(self.source.clone()).plan(manifest).await
+        Planner::new(self.source.clone(), self.concurrency)
+            .plan(manifest)
+            .await
     }
 
     /// Run the Download Phase over a plan, fetching Assets concurrently (bounded

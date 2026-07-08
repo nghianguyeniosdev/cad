@@ -158,7 +158,7 @@ async fn planner_aggregates_totals_across_entries() {
         assets: two_asset_list(),
         bytes: HashMap::new(),
     });
-    let planner = Planner::new(source);
+    let planner = Planner::new(source, 10);
 
     let plan = planner
         .plan(&two_entry_manifest())
@@ -412,5 +412,46 @@ async fn reports_streamed_bytes_and_completion() {
     assert_eq!(
         reporter.finished.lock().unwrap().as_slice(),
         &[(0, "downloaded".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn enumerate_lists_entries_concurrently() {
+    use std::sync::atomic::Ordering;
+
+    // 6 entries, each listing sleeps briefly. Concurrent enumerate should run
+    // several listings at once; sequential would peak at 1.
+    let entries: Vec<Entry> = (0..6)
+        .map(|i| Entry {
+            namespace: None,
+            package: format!("pkg{i}"),
+            version: "1.0.0".into(),
+            dest: PathBuf::from(format!("out/{i}")),
+        })
+        .collect();
+    let manifest = Manifest {
+        connection: ConnectionSettings {
+            domain: "d".into(),
+            domain_owner: "111122223333".into(),
+            repository: "r".into(),
+            region: None,
+        },
+        packages: entries,
+    };
+
+    let source = Arc::new(fakes::ListConcurrencyProbeSource::new(two_asset_list()));
+    let planner = Planner::new(source.clone(), 10);
+
+    let plan = planner.plan(&manifest).await.expect("enumerate ok");
+
+    assert_eq!(plan.total_files(), 12, "6 entries x 2 assets");
+    let max = source.max_in_flight.load(Ordering::SeqCst);
+    assert!(
+        max >= 2,
+        "enumerate should list entries concurrently; saw {max}"
+    );
+    assert!(
+        max <= 10,
+        "must not exceed the concurrency bound; saw {max}"
     );
 }
