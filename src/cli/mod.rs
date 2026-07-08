@@ -39,6 +39,9 @@ enum Command {
         /// Maximum number of Assets to download concurrently.
         #[arg(long, default_value_t = 10)]
         concurrency: usize,
+        /// Ignore any cached asset lists and re-query CodeArtifact.
+        #[arg(long)]
+        refresh_cache: bool,
     },
     /// Check the local environment.
     Doctor {
@@ -75,7 +78,8 @@ pub fn run(args: impl IntoIterator<Item = String>, out: &mut dyn Write) -> i32 {
             manifest,
             profile,
             concurrency,
-        } => run_download(manifest, profile, concurrency, out),
+            refresh_cache,
+        } => run_download(manifest, profile, concurrency, refresh_cache, out),
         Command::Doctor { profile } => run_doctor(profile, out),
         Command::Init { force } => run_init(force, out),
     }
@@ -134,6 +138,7 @@ fn run_download(
     manifest_path: PathBuf,
     profile: Option<String>,
     concurrency: usize,
+    refresh_cache: bool,
     out: &mut dyn Write,
 ) -> i32 {
     let yaml = match std::fs::read_to_string(&manifest_path) {
@@ -189,6 +194,7 @@ fn run_download(
             profile,
             concurrency,
             authenticator,
+            refresh_cache,
         )
         .await
         {

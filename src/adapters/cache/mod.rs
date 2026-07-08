@@ -22,6 +22,7 @@ pub struct CachingPackageSource {
     inner: Arc<dyn PackageSource>,
     cache: Arc<dyn AssetListCache>,
     connection: ConnectionSettings,
+    refresh: bool,
 }
 
 impl CachingPackageSource {
@@ -34,7 +35,15 @@ impl CachingPackageSource {
             inner,
             cache,
             connection,
+            refresh: false,
         }
+    }
+
+    /// When set, bypass the cache read and always re-query the inner source,
+    /// repopulating the cache with the fresh result.
+    pub fn with_refresh(mut self, refresh: bool) -> Self {
+        self.refresh = refresh;
+        self
     }
 
     fn key(&self, entry: &Entry) -> AssetListKey {
@@ -58,8 +67,10 @@ impl PackageSource for CachingPackageSource {
         }
 
         let key = self.key(entry);
-        if let Some(cached) = self.cache.get(&key).await {
-            return Ok(cached);
+        if !self.refresh {
+            if let Some(cached) = self.cache.get(&key).await {
+                return Ok(cached);
+            }
         }
 
         let assets = self.inner.list_assets(entry).await?;

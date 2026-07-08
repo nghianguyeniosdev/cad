@@ -21,6 +21,7 @@ pub async fn build_download_service(
     profile: Option<String>,
     concurrency: usize,
     authenticator: Arc<dyn Authenticator>,
+    refresh_cache: bool,
 ) -> Result<DownloadService, String> {
     let aws: Arc<dyn PackageSource> = Arc::new(
         CodeArtifactSource::new(connection.clone(), profile.clone())
@@ -32,7 +33,7 @@ pub async fn build_download_service(
         &SqliteAssetListCache::default_path(),
     ));
     let source: Arc<dyn PackageSource> =
-        Arc::new(CachingPackageSource::new(aws, cache, connection));
+        Arc::new(CachingPackageSource::new(aws, cache, connection).with_refresh(refresh_cache));
 
     let files: Arc<dyn FileStore> = Arc::new(LocalFileStore);
 

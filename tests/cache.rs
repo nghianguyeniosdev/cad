@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use acd::adapters::cache::CachingPackageSource;
 use acd::domain::{Asset, ConnectionSettings, Entry};
-use acd::ports::PackageSource;
+use acd::ports::{AssetListCache, PackageSource};
 
 fn conn() -> ConnectionSettings {
     ConnectionSettings {
@@ -81,5 +81,49 @@ async fn snapshot_version_is_never_cached() {
         source.list_calls.load(Ordering::SeqCst),
         2,
         "a snapshot version must hit the inner source every time (never cached)"
+    );
+}
+
+#[tokio::test]
+async fn refresh_bypasses_cache_and_repopulates() {
+    // Cache holds a STALE list; the inner source has the FRESH list.
+    let stale = vec![Asset {
+        name: "stale.bin".into(),
+        size: 1,
+        expected_md5: "00000000000000000000000000000000".into(),
+    }];
+    let fresh = two_assets();
+
+    let cache = Arc::new(fakes::InMemoryAssetListCache::default());
+    let source = Arc::new(fakes::ListCountingSource::new(fresh.clone()));
+    let decorator =
+        CachingPackageSource::new(source.clone(), cache.clone(), conn()).with_refresh(true);
+    let entry = entry("1.0.0");
+
+    // Pre-seed the cache with the stale value.
+    cache
+        .put(
+            &acd::ports::AssetListKey {
+                domain: "d".into(),
+                domain_owner: "111122223333".into(),
+                repository: "r".into(),
+                namespace: Some("ns".into()),
+                package: "pkg".into(),
+                version: "1.0.0".into(),
+            },
+            &stale,
+        )
+        .await;
+
+    let result = decorator.list_assets(&entry).await.unwrap();
+
+    assert_eq!(
+        result, fresh,
+        "refresh returns the fresh list, not the cached stale one"
+    );
+    assert_eq!(
+        source.list_calls.load(Ordering::SeqCst),
+        1,
+        "refresh always queries the inner source"
     );
 }
