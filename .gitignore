@@ -1,6 +1,7 @@
 /target
 /.cargo
 
-# Your filled-in manifest (may contain the account id) — keep the example only.
+# Your filled-in manifests (may contain the account id) — keep the example only.
 /codeartifact.yaml
+/codeartifact_version.yaml
 /artifacts

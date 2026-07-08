@@ -222,7 +222,7 @@ impl acd::ports::ProgressReporter for RecordingReporter {
         *self.advanced.lock().unwrap().entry(index).or_default() += bytes;
     }
 
-    fn asset_finished(&self, index: usize, outcome: &acd::domain::AssetOutcome) {
+    fn asset_finished(&self, index: usize, _name: &str, outcome: &acd::domain::AssetOutcome) {
         let label = match outcome {
             acd::domain::AssetOutcome::Downloaded(_) => "downloaded",
             acd::domain::AssetOutcome::Cached => "cached",

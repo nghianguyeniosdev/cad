@@ -6,13 +6,13 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use crate::domain::{AssetOutcome, RunSummary};
 use crate::ports::ProgressReporter;
 
-/// A hybrid apt-style reporter (TTY): up to `concurrency` live per-Asset bars
-/// plus an overall bytes bar, with a persistent `✓`/`✗` line logged as each
-/// Asset finishes.
+/// A TTY reporter: one line per downloading Asset that updates in place and
+/// then settles into a `✓`/`✗` done state on the same line, plus an overall
+/// file counter (`Total N/M files`) pinned at the bottom.
 pub struct IndicatifReporter {
     multi: MultiProgress,
     overall: Mutex<Option<ProgressBar>>,
-    bars: Mutex<HashMap<usize, (ProgressBar, String, u64)>>,
+    bars: Mutex<HashMap<usize, (ProgressBar, u64)>>,
 }
 
 impl IndicatifReporter {
@@ -32,60 +32,85 @@ impl Default for IndicatifReporter {
 }
 
 fn asset_style() -> ProgressStyle {
-    ProgressStyle::with_template("  {msg:24} [{bar:30}] {bytes}/{total_bytes}")
+    ProgressStyle::with_template("  {msg:26} [{bar:28}] {bytes}/{total_bytes}")
         .unwrap()
         .progress_chars("=> ")
+}
+
+/// Style for a finished line — no bar, just the settled message (in place).
+fn done_style() -> ProgressStyle {
+    ProgressStyle::with_template("  {msg}").unwrap()
 }
 
 fn overall_style() -> ProgressStyle {
-    ProgressStyle::with_template("Total [{bar:30}] {bytes}/{total_bytes} ({eta})")
-        .unwrap()
-        .progress_chars("=> ")
+    // The overall line is a file counter, not a bytes bar.
+    ProgressStyle::with_template("Total {pos}/{len} files").unwrap()
 }
 
 impl ProgressReporter for IndicatifReporter {
-    fn start(&self, _total_files: usize, total_bytes: u64) {
-        let bar = self.multi.add(ProgressBar::new(total_bytes));
+    fn start(&self, total_files: usize, _total_bytes: u64) {
+        // Overall line counts completed files (not bytes).
+        let bar = self.multi.add(ProgressBar::new(total_files as u64));
         bar.set_style(overall_style());
         *self.overall.lock().unwrap() = Some(bar);
     }
 
     fn asset_started(&self, index: usize, name: &str, size: u64) {
-        let bar = ProgressBar::new(size);
+        // Add to the MultiProgress FIRST (binds the bar to the group's draw
+        // target), THEN style it — otherwise the bar draws standalone and every
+        // update lands on a new line.
+        let bar = match self.overall.lock().unwrap().as_ref() {
+            Some(overall) => self.multi.insert_before(overall, ProgressBar::new(size)),
+            None => self.multi.add(ProgressBar::new(size)),
+        };
         bar.set_style(asset_style());
         bar.set_message(name.to_string());
-        // Insert per-Asset bars above the overall bar so the overall stays pinned
-        // at the bottom (apt-style).
-        let bar = match self.overall.lock().unwrap().as_ref() {
-            Some(overall) => self.multi.insert_before(overall, bar),
-            None => self.multi.add(bar),
-        };
-        self.bars
-            .lock()
-            .unwrap()
-            .insert(index, (bar, name.to_string(), size));
+        self.bars.lock().unwrap().insert(index, (bar, size));
     }
 
     fn asset_advanced(&self, index: usize, bytes: u64) {
-        if let Some((bar, _, _)) = self.bars.lock().unwrap().get(&index) {
+        // Only the per-file bar tracks bytes; the overall line counts files.
+        if let Some((bar, _)) = self.bars.lock().unwrap().get(&index) {
             bar.inc(bytes);
-        }
-        if let Some(overall) = self.overall.lock().unwrap().as_ref() {
-            overall.inc(bytes);
         }
     }
 
-    fn asset_finished(&self, index: usize, outcome: &AssetOutcome) {
-        let Some((bar, name, size)) = self.bars.lock().unwrap().remove(&index) else {
-            return;
-        };
-        bar.finish_and_clear();
-        let line = match outcome {
-            AssetOutcome::Downloaded(_) => format!("✓ {name} ({size} bytes) md5 ok"),
-            AssetOutcome::Cached => format!("✓ {name} (cached)"),
-            AssetOutcome::Failed(failure) => format!("✗ {name}: {}", failure.message),
-        };
-        let _ = self.multi.println(line);
+    fn asset_finished(&self, index: usize, name: &str, outcome: &AssetOutcome) {
+        let bar = self.bars.lock().unwrap().remove(&index);
+        match (bar, outcome) {
+            // A downloading Asset: settle its own line into the done state.
+            (Some((bar, size)), AssetOutcome::Downloaded(_)) => {
+                bar.set_style(done_style());
+                bar.finish_with_message(format!("✓ {name} ({size} bytes) md5 ok"));
+            }
+            (Some((bar, _)), AssetOutcome::Failed(failure)) => {
+                bar.set_style(done_style());
+                bar.finish_with_message(format!("✗ {name}: {}", failure.message));
+            }
+            (Some((bar, _)), AssetOutcome::Cached) => {
+                bar.set_style(done_style());
+                bar.finish_with_message(format!("✓ {name} (cached)"));
+            }
+            // Cached Asset never started a bar — print a one-off done line.
+            (None, AssetOutcome::Cached) => {
+                let _ = self.multi.println(format!("  ✓ {name} (cached)"));
+            }
+            (None, AssetOutcome::Downloaded(_)) => {
+                let _ = self.multi.println(format!("  ✓ {name} md5 ok"));
+            }
+            (None, AssetOutcome::Failed(failure)) => {
+                let _ = self
+                    .multi
+                    .println(format!("  ✗ {name}: {}", failure.message));
+            }
+        }
+
+        // Advance the overall file counter for an obtained (downloaded/cached) Asset.
+        if matches!(outcome, AssetOutcome::Downloaded(_) | AssetOutcome::Cached) {
+            if let Some(overall) = self.overall.lock().unwrap().as_ref() {
+                overall.inc(1);
+            }
+        }
     }
 
     fn finish(&self, _summary: &RunSummary) {

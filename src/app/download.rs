@@ -132,18 +132,18 @@ impl DownloadService {
     /// a file already present at `dest` matches the expected MD5. Reports its
     /// lifecycle to the progress reporter.
     async fn download_one(&self, index: usize, entry: &Entry, asset: &Asset) -> AssetOutcome {
-        self.reporter.asset_started(index, &asset.name, asset.size);
-
         let dest = entry.dest.join(&asset.name);
         let outcome = if self.files.existing_md5(&dest).await.as_deref()
             == Some(asset.expected_md5.as_str())
         {
+            // Cached: no download, so no progress bar is started.
             AssetOutcome::Cached
         } else {
+            self.reporter.asset_started(index, &asset.name, asset.size);
             self.download_with_retry(index, entry, asset, &dest).await
         };
 
-        self.reporter.asset_finished(index, &outcome);
+        self.reporter.asset_finished(index, &asset.name, &outcome);
         outcome
     }
 

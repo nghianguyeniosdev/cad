@@ -12,11 +12,11 @@ impl ProgressReporter for PlainReporter {
 
     fn asset_advanced(&self, _index: usize, _bytes: u64) {}
 
-    fn asset_finished(&self, _index: usize, outcome: &AssetOutcome) {
+    fn asset_finished(&self, _index: usize, name: &str, outcome: &AssetOutcome) {
         match outcome {
-            AssetOutcome::Downloaded(bytes) => eprintln!("  downloaded ({bytes} bytes)"),
-            AssetOutcome::Cached => eprintln!("  cached"),
-            AssetOutcome::Failed(failure) => eprintln!("  failed: {}", failure.message),
+            AssetOutcome::Downloaded(bytes) => eprintln!("  ✓ {name} ({bytes} bytes) md5 ok"),
+            AssetOutcome::Cached => eprintln!("  ✓ {name} (cached)"),
+            AssetOutcome::Failed(failure) => eprintln!("  ✗ {name}: {}", failure.message),
         }
     }
 
