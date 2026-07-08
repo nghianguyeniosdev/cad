@@ -56,6 +56,19 @@ Package Versions, consulted before querying CodeArtifact to skip the listing
 round-trip. Safe because a non-Snapshot version's asset list never changes.
 _Avoid_: index, database
 
+**Versioned Layout**:
+A Manifest mode (`layout: versioned`) where each Entry's Assets download into a
+derived `<Cache Root>/<package>/<version>/` folder instead of an explicit `dest`.
+The default is Flat Layout — an explicit per-Entry `dest`.
+_Avoid_: pods layout, cache mode
+
+**Cache Root**:
+The base directory for Versioned Layout, where downloaded Assets are stored under
+`<package>/<version>/`. Read from `~/.acd/config.yml` (`cache_root`), default
+`~/Library/Caches/CocoaPods/TymePods`. Distinct from the Asset List Cache (the
+SQLite listing cache).
+_Avoid_: output dir, cache dir
+
 **Run Summary**:
 The end-of-run tally — counts of downloaded / cached / failed Assets, total
 bytes, elapsed time, and the failed-Asset list — that determines the exit code.
