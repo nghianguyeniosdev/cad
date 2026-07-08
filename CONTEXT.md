@@ -44,6 +44,18 @@ The complete set of Assets to fetch, with per-Asset expected MD5 and size plus
 aggregate totals, produced by the Enumerate Phase before any download begins.
 _Avoid_: queue, batch, job list
 
+**Snapshot Version**:
+A mutable Package Version — its `version` contains "snapshot" (case-insensitive).
+Its assets can be re-published in place, so it is never cached and is always
+enumerated live.
+_Avoid_: pre-release, dev build
+
+**Asset List Cache**:
+A local store (SQLite) of the enumerated Assets of *immutable* (non-Snapshot)
+Package Versions, consulted before querying CodeArtifact to skip the listing
+round-trip. Safe because a non-Snapshot version's asset list never changes.
+_Avoid_: index, database
+
 **Run Summary**:
 The end-of-run tally — counts of downloaded / cached / failed Assets, total
 bytes, elapsed time, and the failed-Asset list — that determines the exit code.
