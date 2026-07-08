@@ -11,7 +11,7 @@ brew tap nghianguyeniosdev/tap
 brew install acd
 ```
 
-Prebuilt binaries are published for Apple Silicon and Intel macOS.
+Prebuilt binaries are published for **Apple Silicon (arm64) macOS**.
 
 ## Usage
 
@@ -56,7 +56,7 @@ Tag a version to trigger `.github/workflows/release.yml`:
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-CI cross-builds both macOS targets, attaches the tarballs to a GitHub Release,
+CI builds the Apple Silicon binary, attaches the tarball to a GitHub Release,
 and generates a ready-to-paste `acd.rb`. Copy that `acd.rb` into
 `Formula/acd.rb` in the `nghianguyeniosdev/homebrew-tap` repo to publish the
 new version. A reference formula lives at [`packaging/acd.rb`](packaging/acd.rb).

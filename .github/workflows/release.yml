@@ -9,37 +9,30 @@ permissions:
 
 jobs:
   build:
-    name: build ${{ matrix.target }}
-    strategy:
-      matrix:
-        include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
-    runs-on: ${{ matrix.os }}
+    name: build aarch64-apple-darwin
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --target aarch64-apple-darwin
 
       - name: Package
         run: |
           version="${GITHUB_REF_NAME#v}"
-          tarball="acd-${version}-${{ matrix.target }}.tar.gz"
-          tar -C "target/${{ matrix.target }}/release" -czf "$tarball" acd
+          tarball="acd-${version}-aarch64-apple-darwin.tar.gz"
+          tar -C "target/aarch64-apple-darwin/release" -czf "$tarball" acd
           shasum -a 256 "$tarball" | awk '{print $1}' > "$tarball.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target }}
+          name: aarch64-apple-darwin
           path: |
             acd-*.tar.gz
             acd-*.tar.gz.sha256
@@ -58,7 +51,6 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           arm_sha="$(cat "dist/acd-${version}-aarch64-apple-darwin.tar.gz.sha256")"
-          x86_sha="$(cat "dist/acd-${version}-x86_64-apple-darwin.tar.gz.sha256")"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           cat > acd.rb <<RUBY
           class Acd < Formula
@@ -67,16 +59,11 @@ jobs:
             version "${version}"
             license "MIT"
 
-            on_macos do
-              on_arm do
-                url "${base}/acd-${version}-aarch64-apple-darwin.tar.gz"
-                sha256 "${arm_sha}"
-              end
-              on_intel do
-                url "${base}/acd-${version}-x86_64-apple-darwin.tar.gz"
-                sha256 "${x86_sha}"
-              end
-            end
+            depends_on arch: :arm64
+            depends_on :macos
+
+            url "${base}/acd-${version}-aarch64-apple-darwin.tar.gz"
+            sha256 "${arm_sha}"
 
             def install
               bin.install "acd"
