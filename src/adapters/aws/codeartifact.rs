@@ -5,14 +5,13 @@ use aws_sdk_codeartifact::Client;
 use futures::stream::StreamExt;
 use tokio_util::io::ReaderStream;
 
-use crate::domain::{Asset, ConnectionSettings, Entry, Failure};
+use crate::domain::{Asset, ConnectionSettings, Entry, Failure, FailureKind};
 use crate::ports::{AssetStream, PackageSource};
 
 /// A `PackageSource` backed by AWS CodeArtifact generic packages, using the
 /// AWS SDK for Rust. Credentials/region come from the resolved AWS profile
-/// (SSO session). Error classification (auth vs transient vs fatal) is
-/// deliberately minimal here — richer classification arrives with the
-/// SessionCoordinator slice.
+/// (SSO session). SDK errors are classified into `FailureKind` (see `classify`)
+/// so the SessionCoordinator can recover from an expired session.
 pub struct CodeArtifactSource {
     client: Client,
     connection: ConnectionSettings,
@@ -56,11 +55,14 @@ impl PackageSource for CodeArtifactSource {
         }
 
         let response = request.send().await.map_err(|err| {
-            Failure::fatal(format!(
-                "list assets for {}: {}",
-                describe_entry(entry),
-                sdk_message(&err)
-            ))
+            Failure::new(
+                classify(&err),
+                format!(
+                    "list assets for {}: {}",
+                    describe_entry(entry),
+                    sdk_message(&err)
+                ),
+            )
         })?;
 
         let assets = response
@@ -95,12 +97,15 @@ impl PackageSource for CodeArtifactSource {
         }
 
         let response = request.send().await.map_err(|err| {
-            Failure::fatal(format!(
-                "fetch {} of {}: {}",
-                asset.name,
-                describe_entry(entry),
-                sdk_message(&err)
-            ))
+            Failure::new(
+                classify(&err),
+                format!(
+                    "fetch {} of {}: {}",
+                    asset.name,
+                    describe_entry(entry),
+                    sdk_message(&err)
+                ),
+            )
         })?;
 
         let asset_name = asset.name.clone();
@@ -110,6 +115,36 @@ impl PackageSource for CodeArtifactSource {
                 .map_err(|err| Failure::transient(format!("read {asset_name}: {err}")))
         });
         Ok(Box::pin(stream))
+    }
+}
+
+/// Classify an SDK error into a `FailureKind`. An expired SSO token (surfaced
+/// as a credential-resolution failure or `ExpiredTokenException`) is
+/// `AuthExpired` so the SessionCoordinator can re-login; throttling and
+/// dispatch/timeout are `Transient`; everything else (validation, not-found,
+/// permissions) is `Fatal` — re-login wouldn't help and would loop.
+fn classify<E, R>(err: &SdkError<E, R>) -> FailureKind
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug,
+{
+    if let Some(code) = err.as_service_error().and_then(ProvideErrorMetadata::code) {
+        return match code {
+            "ExpiredTokenException" => FailureKind::AuthExpired,
+            "ThrottlingException" | "TooManyRequestsException" => FailureKind::Transient,
+            _ => FailureKind::Fatal,
+        };
+    }
+    // Non-service error (dispatch/timeout/credential resolution).
+    let message = sdk_message(err).to_lowercase();
+    if message.contains("expired")
+        || message.contains("sso")
+        || message.contains("token")
+        || message.contains("credential")
+    {
+        FailureKind::AuthExpired
+    } else {
+        FailureKind::Transient
     }
 }
 

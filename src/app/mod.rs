@@ -9,4 +9,4 @@ pub mod session;
 pub use download::DownloadService;
 pub use planner::Planner;
 pub use retry::RetryPolicy;
-pub use session::ensure_session;
+pub use session::{ensure_session, SessionCoordinator};

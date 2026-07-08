@@ -114,8 +114,12 @@ fn run_download(
 
     runtime.block_on(async {
         // Preflight: ensure a usable SSO session, auto-logging in if needed.
-        let authenticator = crate::adapters::sso::SsoAuthenticator;
-        if let Err(failure) = crate::app::ensure_session(&authenticator, profile.as_deref()).await {
+        // The same authenticator powers mid-run re-login recovery.
+        let authenticator: std::sync::Arc<dyn crate::ports::Authenticator> =
+            std::sync::Arc::new(crate::adapters::sso::SsoAuthenticator);
+        if let Err(failure) =
+            crate::app::ensure_session(authenticator.as_ref(), profile.as_deref()).await
+        {
             let _ = writeln!(out, "error: {}", failure.message);
             return EXIT_ENV;
         }
@@ -124,6 +128,7 @@ fn run_download(
             manifest.connection.clone(),
             profile,
             concurrency,
+            authenticator,
         )
         .await
         {

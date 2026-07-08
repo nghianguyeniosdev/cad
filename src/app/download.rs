@@ -3,12 +3,13 @@ use std::sync::Arc;
 use futures::stream::{self, StreamExt};
 use md5::{Digest, Md5};
 
-use crate::app::{Planner, RetryPolicy};
+use crate::app::session::NoLoginAuthenticator;
+use crate::app::{Planner, RetryPolicy, SessionCoordinator};
 use crate::domain::{
     Asset, AssetOutcome, DownloadPlan, Entry, FailedAsset, Failure, FailureKind, Manifest,
     RunSummary,
 };
-use crate::ports::{FileStore, NoopReporter, PackageSource, ProgressReporter};
+use crate::ports::{Authenticator, FileStore, NoopReporter, PackageSource, ProgressReporter};
 
 /// The default number of Assets downloaded concurrently.
 pub const DEFAULT_CONCURRENCY: usize = 10;
@@ -18,6 +19,7 @@ pub struct DownloadService {
     source: Arc<dyn PackageSource>,
     files: Arc<dyn FileStore>,
     reporter: Arc<dyn ProgressReporter>,
+    coordinator: Arc<SessionCoordinator>,
     concurrency: usize,
     retry: RetryPolicy,
 }
@@ -28,9 +30,23 @@ impl DownloadService {
             source,
             files,
             reporter: Arc::new(NoopReporter),
+            coordinator: Arc::new(SessionCoordinator::new(
+                Arc::new(NoLoginAuthenticator),
+                None,
+            )),
             concurrency: DEFAULT_CONCURRENCY,
             retry: RetryPolicy::default(),
         }
+    }
+
+    /// Configure mid-run re-login recovery with the given authenticator/profile.
+    pub fn with_authenticator(
+        mut self,
+        authenticator: Arc<dyn Authenticator>,
+        profile: Option<String>,
+    ) -> Self {
+        self.coordinator = Arc::new(SessionCoordinator::new(authenticator, profile));
+        self
     }
 
     /// Set the maximum number of Assets downloaded concurrently.
@@ -139,8 +155,20 @@ impl DownloadService {
     ) -> AssetOutcome {
         let mut attempt = 0;
         loop {
+            let generation = self.coordinator.generation();
             match self.fetch_verify_write(index, entry, asset, dest).await {
-                Ok(bytes) => return AssetOutcome::Downloaded(bytes),
+                Ok(bytes) => {
+                    self.coordinator.note_progress();
+                    return AssetOutcome::Downloaded(bytes);
+                }
+                // Auth expiry: pause-the-world single-flight re-login, then
+                // retry WITHOUT consuming the transient retry budget.
+                Err(failure) if failure.kind == FailureKind::AuthExpired => {
+                    match self.coordinator.reauth(generation).await {
+                        Ok(_) => continue,
+                        Err(abort) => return AssetOutcome::Failed(abort),
+                    }
+                }
                 Err(failure)
                     if failure.kind == FailureKind::Transient
                         && attempt < self.retry.max_retries =>

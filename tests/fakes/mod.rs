@@ -8,13 +8,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 
 use acd::domain::{Asset, Entry, Failure};
-use acd::ports::{AssetStream, FileStore, PackageSource};
+use acd::ports::{AssetStream, Authenticator, FileStore, PackageSource, SessionStatus};
 
 /// Wrap owned bytes as a single-chunk `AssetStream`.
 fn one_chunk(bytes: Vec<u8>) -> AssetStream {
@@ -264,6 +264,88 @@ impl acd::ports::Authenticator for FakeAuthenticator {
             Err(Failure::fatal("aws sso login failed"))
         } else {
             Ok(())
+        }
+    }
+}
+
+/// A `PackageSource` that fails every fetch with `AuthExpired` until the shared
+/// `logins` counter reaches `succeed_after_logins`, then serves `bytes`. Used
+/// with `SharedLoginAuthenticator` to drive mid-run re-login behavior.
+pub struct AuthExpiringSource {
+    pub assets: Vec<Asset>,
+    pub bytes: Vec<u8>,
+    pub logins: Arc<AtomicUsize>,
+    pub succeed_after_logins: usize,
+    pub fetch_calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl PackageSource for AuthExpiringSource {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
+        Ok(self.assets.clone())
+    }
+
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
+        self.fetch_calls.fetch_add(1, Ordering::SeqCst);
+        if self.logins.load(Ordering::SeqCst) >= self.succeed_after_logins {
+            Ok(one_chunk(self.bytes.clone()))
+        } else {
+            Err(Failure::auth_expired("the SSO token has expired"))
+        }
+    }
+}
+
+/// An `Authenticator` that counts logins into a shared counter (observed by
+/// `AuthExpiringSource`) and can be made to fail.
+pub struct SharedLoginAuthenticator {
+    pub logins: Arc<AtomicUsize>,
+    pub login_fails: bool,
+}
+
+#[async_trait]
+impl Authenticator for SharedLoginAuthenticator {
+    async fn session_status(&self, _profile: Option<&str>) -> SessionStatus {
+        SessionStatus::Valid
+    }
+
+    async fn login(&self, _profile: Option<&str>) -> Result<(), Failure> {
+        self.logins.fetch_add(1, Ordering::SeqCst);
+        if self.login_fails {
+            Err(Failure::fatal("aws sso login failed"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A step in a `ScriptedSource` fetch sequence.
+#[derive(Clone)]
+pub enum FetchStep {
+    AuthExpired,
+    Transient,
+    Ok(Vec<u8>),
+}
+
+/// A `PackageSource` that returns a predetermined sequence of fetch outcomes
+/// (for sequential single-Asset scenarios).
+pub struct ScriptedSource {
+    pub assets: Vec<Asset>,
+    pub steps: Mutex<std::collections::VecDeque<FetchStep>>,
+}
+
+#[async_trait]
+impl PackageSource for ScriptedSource {
+    async fn list_assets(&self, _entry: &Entry) -> Result<Vec<Asset>, Failure> {
+        Ok(self.assets.clone())
+    }
+
+    async fn fetch_asset(&self, _entry: &Entry, _asset: &Asset) -> Result<AssetStream, Failure> {
+        let step = self.steps.lock().unwrap().pop_front();
+        match step {
+            Some(FetchStep::AuthExpired) => Err(Failure::auth_expired("token expired")),
+            Some(FetchStep::Transient) => Err(Failure::transient("blip")),
+            Some(FetchStep::Ok(bytes)) => Ok(one_chunk(bytes)),
+            None => Err(Failure::fatal("script exhausted")),
         }
     }
 }
