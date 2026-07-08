@@ -65,8 +65,8 @@ _Avoid_: pods layout, cache mode
 **Cache Root**:
 The base directory for Versioned Layout, where downloaded Assets are stored under
 `<package>/<version>/`. Read from `~/.acd/config.yml` (`cache_root`), default
-`~/Library/Caches/CocoaPods/TymePods`. Distinct from the Asset List Cache (the
-SQLite listing cache).
+`~/Library/Caches/CocoaPods/iOSArtifactPods`. Distinct from the Asset List Cache
+(the SQLite listing cache).
 _Avoid_: output dir, cache dir
 
 **Run Summary**:

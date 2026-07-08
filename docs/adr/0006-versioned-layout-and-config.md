@@ -12,7 +12,7 @@ Accepted
 version-keyed cache:
 
 ```
-~/Library/Caches/CocoaPods/TymePods/<package>/<version>/artifact.zip
+~/Library/Caches/CocoaPods/iOSArtifactPods/<package>/<version>/artifact.zip
 ```
 
 `acd`'s current model requires an explicit `dest` per Entry. Reproducing the
@@ -33,7 +33,7 @@ downloaded archives is a separate follow-up.
 - `layout: flat` (default) — current behavior; each Entry has an explicit `dest`.
 - `layout: versioned` — each Entry's Assets download into a derived
   `<cache_root>/<package>/<version>/` folder. `dest` is optional and ignored in
-  this mode. No namespace segment appears in the path (matching the TymePods
+  this mode. No namespace segment appears in the path (matching the iOSArtifactPods
   layout `<package>/<version>`). Assets keep their real CodeArtifact names.
 
 Consequently `Entry.dest` becomes optional in the domain (required only in flat
@@ -42,11 +42,11 @@ mode; validated per mode).
 **Global config `~/.acd/config.yml`.** A single key for now:
 
 ```yaml
-cache_root: ~/Library/Caches/CocoaPods/TymePods
+cache_root: ~/Library/Caches/CocoaPods/iOSArtifactPods
 ```
 
 - **Precedence** (highest first): `--cache-root` flag → `cache_root` in the
-  config file → built-in default `~/Library/Caches/CocoaPods/TymePods`.
+  config file → built-in default `~/Library/Caches/CocoaPods/iOSArtifactPods`.
 - `~` in the value (and default) expands to `$HOME`.
 - A **missing** config file uses the default silently (config is optional).
 - A **malformed** config file (bad YAML / wrong type) is a **hard error** — a
@@ -56,7 +56,7 @@ cache_root: ~/Library/Caches/CocoaPods/TymePods
 
 - A whole Manifest is either "iOS pods → the versioned cache" or "arbitrary
   files → explicit dests"; the layout rule lives in one place.
-- `acd` can populate the TymePods cache without per-entry dests, a step toward
+- `acd` can populate the iOSArtifactPods cache without per-entry dests, a step toward
   replacing `iosPrepareArtifact.sh`.
 - New global config file (distinct from the Manifest, which stays per-fetch).
 - "Cache Root" (downloaded-asset store) is distinct from the "Asset List Cache"
