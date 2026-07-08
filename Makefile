@@ -8,6 +8,7 @@
 # Overridable:  make download PROFILE=my-profile MANIFEST=path.yaml
 PROFILE ?= TymeX-AWS-Engineer-Wks
 MANIFEST ?= codeartifact.yaml
+CACHE ?= $(HOME)/Library/Caches/acd/cache.db
 
 .DEFAULT_GOAL := help
 
@@ -59,6 +60,10 @@ doctor: build ## Run environment checks for PROFILE
 download: build ## Download MANIFEST using PROFILE
 	./target/debug/acd download --manifest $(MANIFEST) --profile $(PROFILE)
 
+.PHONY: refresh
+refresh: build ## Download, bypassing + rebuilding the asset-list cache
+	./target/debug/acd download --manifest $(MANIFEST) --profile $(PROFILE) --refresh-cache
+
 .PHONY: init
 init: build ## Scaffold a codeartifact.yaml
 	./target/debug/acd init
@@ -66,3 +71,13 @@ init: build ## Scaffold a codeartifact.yaml
 .PHONY: demo
 demo: ## Manual mid-run Session Re-login demo (opens a browser login)
 	cargo run --example relogin_demo -- $(PROFILE)
+
+# ─── Asset List Cache ────────────────────────────────────────────────────────
+.PHONY: cache-show
+cache-show: ## Show cached Package Versions (needs sqlite3)
+	@sqlite3 "$(CACHE)" 'select package, version, datetime(cached_at,"unixepoch") from asset_list_cache order by package;' 2>/dev/null \
+		|| echo "no cache at $(CACHE)"
+
+.PHONY: cache-clear
+cache-clear: ## Delete the local asset-list cache
+	rm -f "$(CACHE)"
