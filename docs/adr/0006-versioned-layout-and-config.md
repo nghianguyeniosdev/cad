@@ -23,8 +23,9 @@ package + version, so `acd` should derive it.
 The cache-root base directory varies by machine/setup, so it needs to be
 configurable, with a sensible default.
 
-This ADR covers **step 1**: path derivation + configuration. Extraction of the
-downloaded archives is a separate follow-up.
+`acd` downloads the archive (e.g. `artifact.zip`) into the version folder and
+**keeps it as-is**. Extracting/unzipping the archive is **out of scope for
+`acd`** — it happens in a later phase inside the iOS repo, not here.
 
 ## Decision
 
@@ -61,5 +62,5 @@ cache_root: ~/Library/Caches/CocoaPods/iOSArtifactPods
 - New global config file (distinct from the Manifest, which stays per-fetch).
 - "Cache Root" (downloaded-asset store) is distinct from the "Asset List Cache"
   (SQLite listing cache, ADR 0005) — two different caches, don't conflate.
-- Extraction (`unzip` into the version folder, skip-if-extracted, delete/keep
-  the archive) is deliberately **out of scope here** and handled next.
+- `acd` stores the downloaded archive unchanged; **it never extracts**.
+  Unzipping is done downstream by the iOS repo in a later phase.
