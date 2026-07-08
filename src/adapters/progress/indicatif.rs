@@ -51,9 +51,15 @@ impl ProgressReporter for IndicatifReporter {
     }
 
     fn asset_started(&self, index: usize, name: &str, size: u64) {
-        let bar = self.multi.add(ProgressBar::new(size));
+        let bar = ProgressBar::new(size);
         bar.set_style(asset_style());
         bar.set_message(name.to_string());
+        // Insert per-Asset bars above the overall bar so the overall stays pinned
+        // at the bottom (apt-style).
+        let bar = match self.overall.lock().unwrap().as_ref() {
+            Some(overall) => self.multi.insert_before(overall, bar),
+            None => self.multi.add(bar),
+        };
         self.bars
             .lock()
             .unwrap()
