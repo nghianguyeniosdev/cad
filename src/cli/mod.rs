@@ -43,8 +43,12 @@ enum Command {
     },
     /// Check the local environment.
     Doctor,
-    /// Scaffold a starter Manifest.
-    Init,
+    /// Scaffold a starter Manifest (`codeartifact.yaml`).
+    Init {
+        /// Overwrite an existing `codeartifact.yaml`.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// Library entry point: parse `args` (including argv[0]), write user-facing
@@ -70,7 +74,21 @@ pub fn run(args: impl IntoIterator<Item = String>, out: &mut dyn Write) -> i32 {
             concurrency,
         } => run_download(manifest, profile, concurrency, out),
         Command::Doctor => not_implemented("doctor", out),
-        Command::Init => not_implemented("init", out),
+        Command::Init { force } => run_init(force, out),
+    }
+}
+
+fn run_init(force: bool, out: &mut dyn Write) -> i32 {
+    let path = PathBuf::from("codeartifact.yaml");
+    match crate::app::init::init_manifest(&path, force) {
+        Ok(()) => {
+            let _ = writeln!(out, "Created {}", path.display());
+            0
+        }
+        Err(failure) => {
+            let _ = writeln!(out, "error: {}", failure.message);
+            EXIT_USAGE
+        }
     }
 }
 
