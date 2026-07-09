@@ -2,6 +2,7 @@
 //! and SessionCoordinator. Depends on `domain` + `ports` only. See ADR 0004.
 
 pub mod download;
+pub mod extract;
 pub mod init;
 pub mod planner;
 pub mod retry;

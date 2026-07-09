@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use acd::app::{ensure_session, DownloadService, RetryPolicy};
-use acd::domain::{Asset, ConnectionSettings, Entry, Manifest};
+use acd::domain::{Asset, ConnectionSettings, Entry, Layout, Manifest};
 use acd::ports::SessionStatus;
 
 use fakes::FakeAuthenticator;
@@ -16,6 +16,7 @@ const HELLO_MD5: &str = "5d41402abc4b2a76b9719d911017c592";
 
 fn one_entry_manifest() -> Manifest {
     Manifest {
+        layout: Layout::Flat,
         connection: ConnectionSettings {
             domain: "d".into(),
             domain_owner: "111122223333".into(),

@@ -3,13 +3,18 @@ use std::sync::Arc;
 use futures::stream::{self, StreamExt};
 use md5::{Digest, Md5};
 
+use std::path::PathBuf;
+
+use crate::app::extract::{single_zip, ExtractReport, NoSingleZip};
 use crate::app::session::NoLoginAuthenticator;
 use crate::app::{Planner, RetryPolicy, SessionCoordinator};
 use crate::domain::{
-    Asset, AssetOutcome, DownloadPlan, Entry, FailedAsset, Failure, FailureKind, Manifest,
+    Asset, AssetOutcome, DownloadPlan, Entry, FailedAsset, Failure, FailureKind, Layout, Manifest,
     RunSummary,
 };
-use crate::ports::{Authenticator, FileStore, NoopReporter, PackageSource, ProgressReporter};
+use crate::ports::{
+    Authenticator, Extractor, FileStore, NoopReporter, PackageSource, ProgressReporter,
+};
 
 /// The default number of Assets downloaded concurrently.
 pub const DEFAULT_CONCURRENCY: usize = 10;
@@ -22,6 +27,7 @@ pub struct DownloadService {
     coordinator: Arc<SessionCoordinator>,
     concurrency: usize,
     retry: RetryPolicy,
+    extractor: Option<Arc<dyn Extractor>>,
 }
 
 impl DownloadService {
@@ -36,7 +42,14 @@ impl DownloadService {
             )),
             concurrency: DEFAULT_CONCURRENCY,
             retry: RetryPolicy::default(),
+            extractor: None,
         }
+    }
+
+    /// Enable the Extract Phase (Versioned layout only) with the given extractor.
+    pub fn with_extractor(mut self, extractor: Arc<dyn Extractor>) -> Self {
+        self.extractor = Some(extractor);
+        self
     }
 
     /// Configure mid-run re-login recovery with the given authenticator/profile.
@@ -112,11 +125,88 @@ impl DownloadService {
         summary
     }
 
-    /// Enumerate then download. On an enumerate failure, returns a summary with
-    /// a single failure recorded (the run is aborted before any download).
+    /// Run the Extract Phase over a plan: unzip each Entry's single archive from
+    /// its Cache Root version folder into `./PodLocals/<package>/Current`. A
+    /// no-op unless the layout is `Versioned` and an extractor is configured.
+    /// Per-package failures are collected (the phase never aborts).
+    pub async fn extract(&self, layout: Layout, plan: &DownloadPlan) -> ExtractReport {
+        let extractor = match (self.extractor.as_ref(), layout) {
+            (Some(extractor), Layout::Versioned) => extractor.clone(),
+            _ => return ExtractReport::default(),
+        };
+
+        // Group each Entry with its Assets (order-preserving).
+        let mut entries: Vec<(&Entry, Vec<Asset>)> = Vec::new();
+        for item in &plan.items {
+            match entries.iter_mut().find(|(entry, _)| *entry == &item.entry) {
+                Some((_, assets)) => assets.push(item.asset.clone()),
+                None => entries.push((&item.entry, vec![item.asset.clone()])),
+            }
+        }
+
+        // Resolve each Entry to an extract job `(package, archive, into)` or a
+        // per-package failure (no zip / more than one zip).
+        let mut jobs: Vec<(String, PathBuf, PathBuf)> = Vec::new();
+        let mut report = ExtractReport::default();
+        for (entry, assets) in &entries {
+            match single_zip(assets) {
+                Ok(zip) => {
+                    let archive = entry.dest.join(&zip.name);
+                    let into = PathBuf::from("PodLocals")
+                        .join(&entry.package)
+                        .join("Current");
+                    jobs.push((entry.package.clone(), archive, into));
+                }
+                Err(problem) => report.failed.push(FailedAsset {
+                    name: entry.package.clone(),
+                    reason: match problem {
+                        NoSingleZip::None => "no .zip asset to extract".to_string(),
+                        NoSingleZip::Multiple(names) => {
+                            format!("more than one .zip asset: {}", names.join(", "))
+                        }
+                    },
+                }),
+            }
+        }
+
+        // Extract concurrently, bounded by the configured concurrency.
+        let results = stream::iter(jobs.into_iter())
+            .map(|(package, archive, into)| {
+                let extractor = extractor.clone();
+                async move {
+                    let outcome = extractor.extract(&archive, &into).await;
+                    (package, outcome)
+                }
+            })
+            .buffer_unordered(self.concurrency)
+            .collect::<Vec<_>>()
+            .await;
+
+        for (package, outcome) in results {
+            match outcome {
+                Ok(()) => report.extracted += 1,
+                Err(failure) => report.failed.push(FailedAsset {
+                    name: package,
+                    reason: failure.message,
+                }),
+            }
+        }
+        report
+    }
+
+    /// Enumerate, download, then (Versioned layout) extract. On an enumerate
+    /// failure, returns a summary with a single failure recorded (the run is
+    /// aborted before any download).
     pub async fn run(&self, manifest: &Manifest) -> RunSummary {
         match self.enumerate(manifest).await {
-            Ok(plan) => self.download(&plan).await,
+            Ok(plan) => {
+                let mut summary = self.download(&plan).await;
+                let report = self.extract(manifest.layout, &plan).await;
+                summary.extracted += report.extracted;
+                summary.failed += report.failed.len();
+                summary.failed_assets.extend(report.failed);
+                summary
+            }
             Err(failure) => RunSummary {
                 failed: 1,
                 failed_assets: vec![FailedAsset {

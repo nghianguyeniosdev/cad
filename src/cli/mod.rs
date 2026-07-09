@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::domain::RawManifest;
+use crate::domain::{Layout, RawManifest};
 
 /// Exit code for a usage error (unrecognized command / bad invocation).
 const EXIT_USAGE: i32 = 2;
@@ -249,7 +249,7 @@ fn run_download(
         );
 
         // Download Phase.
-        let summary = service.download(&plan).await;
+        let mut summary = service.download(&plan).await;
         let _ = writeln!(
             out,
             "Fetched {} in {} files ({} cached); {} failed.",
@@ -258,6 +258,21 @@ fn run_download(
             summary.cached,
             summary.failed
         );
+
+        // Extract Phase (Versioned layout): unzip each archive into ./PodLocals.
+        let report = service.extract(manifest.layout, &plan).await;
+        if manifest.layout == Layout::Versioned {
+            let _ = writeln!(
+                out,
+                "Extracted {} packages into PodLocals; {} failed.",
+                report.extracted,
+                report.failed.len()
+            );
+        }
+        summary.extracted += report.extracted;
+        summary.failed += report.failed.len();
+        summary.failed_assets.extend(report.failed);
+
         for failed in &summary.failed_assets {
             let _ = writeln!(out, "  failed: {}: {}", failed.name, failed.reason);
         }

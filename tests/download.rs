@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use acd::app::{DownloadService, Planner};
-use acd::domain::{Asset, ConnectionSettings, Entry, Manifest};
+use acd::domain::{Asset, ConnectionSettings, Entry, Layout, Manifest};
 
 use fakes::{FakeFileStore, FakePackageSource};
 
@@ -26,6 +26,7 @@ fn two_asset_list() -> Vec<Asset> {
 
 fn two_entry_manifest() -> Manifest {
     Manifest {
+        layout: Layout::Flat,
         connection: ConnectionSettings {
             domain: "my-domain".into(),
             domain_owner: "111122223333".into(),
@@ -51,6 +52,7 @@ fn two_entry_manifest() -> Manifest {
 
 fn single_entry_manifest() -> Manifest {
     Manifest {
+        layout: Layout::Flat,
         connection: ConnectionSettings {
             domain: "my-domain".into(),
             domain_owner: "111122223333".into(),
@@ -430,6 +432,7 @@ async fn enumerate_lists_entries_concurrently() {
         })
         .collect();
     let manifest = Manifest {
+        layout: Layout::Flat,
         connection: ConnectionSettings {
             domain: "d".into(),
             domain_owner: "111122223333".into(),

@@ -7,11 +7,13 @@ use std::sync::Arc;
 
 use crate::adapters::aws::CodeArtifactSource;
 use crate::adapters::cache::{CachingPackageSource, SqliteAssetListCache};
-use crate::adapters::fs::LocalFileStore;
+use crate::adapters::fs::{LocalExtractor, LocalFileStore};
 use crate::adapters::progress::{IndicatifReporter, PlainReporter};
 use crate::app::DownloadService;
 use crate::domain::ConnectionSettings;
-use crate::ports::{AssetListCache, Authenticator, FileStore, PackageSource, ProgressReporter};
+use crate::ports::{
+    AssetListCache, Authenticator, Extractor, FileStore, PackageSource, ProgressReporter,
+};
 
 /// Wire the real adapters into a `DownloadService` for the given connection.
 /// Chooses the hybrid `indicatif` reporter on a TTY, plain lines otherwise, and
@@ -43,8 +45,12 @@ pub async fn build_download_service(
         Arc::new(PlainReporter)
     };
 
+    // Extract Phase adapter (used only in Versioned layout; the service gates it).
+    let extractor: Arc<dyn Extractor> = Arc::new(LocalExtractor);
+
     Ok(DownloadService::new(source, files)
         .with_concurrency(concurrency)
         .with_reporter(reporter)
-        .with_authenticator(authenticator, profile))
+        .with_authenticator(authenticator, profile)
+        .with_extractor(extractor))
 }

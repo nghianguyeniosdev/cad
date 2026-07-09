@@ -24,6 +24,8 @@ pub struct RunSummary {
     pub downloaded: usize,
     pub cached: usize,
     pub failed: usize,
+    /// Package Versions whose archive was unzipped in the Extract Phase.
+    pub extracted: usize,
     pub bytes: u64,
     /// The Assets that failed, each with a reason (for the failed-Asset list).
     pub failed_assets: Vec<FailedAsset>,

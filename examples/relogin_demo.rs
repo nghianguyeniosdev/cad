@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use acd::adapters::fs::LocalFileStore;
 use acd::adapters::sso::SsoAuthenticator;
 use acd::app::DownloadService;
-use acd::domain::{Asset, ConnectionSettings, Entry, Failure, Manifest};
+use acd::domain::{Asset, ConnectionSettings, Entry, Failure, Layout, Manifest};
 use acd::ports::{AssetStream, Authenticator, PackageSource, SessionStatus};
 
 /// Wraps the real `SsoAuthenticator`: flips a shared flag once login succeeds,
@@ -100,6 +100,7 @@ async fn main() {
     });
 
     let manifest = Manifest {
+        layout: Layout::Flat,
         connection: ConnectionSettings {
             domain: "demo".into(),
             domain_owner: "000000000000".into(),

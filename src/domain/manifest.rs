@@ -38,6 +38,7 @@ pub struct Entry {
 /// A resolved Manifest: Connection Settings plus Entries with concrete dests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
+    pub layout: Layout,
     pub connection: ConnectionSettings,
     pub packages: Vec<Entry>,
 }
@@ -99,6 +100,7 @@ impl RawManifest {
             });
         }
         Ok(Manifest {
+            layout: self.layout,
             connection: self.connection,
             packages,
         })

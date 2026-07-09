@@ -13,9 +13,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use std::collections::HashSet;
+
 use acd::domain::{Asset, Entry, Failure};
 use acd::ports::{
-    AssetListCache, AssetListKey, AssetStream, Authenticator, FileStore, PackageSource,
+    AssetListCache, AssetListKey, AssetStream, Authenticator, Extractor, FileStore, PackageSource,
     SessionStatus,
 };
 
@@ -75,6 +77,44 @@ impl FileStore for FakeFileStore {
             .unwrap()
             .insert(dest.to_path_buf(), bytes.to_vec());
         Ok(())
+    }
+}
+
+/// An `Extractor` that records every `(archive, into)` call in memory, and can
+/// be told to fail for specific archive paths (to exercise per-package failure).
+#[derive(Default)]
+pub struct FakeExtractor {
+    calls: Mutex<Vec<(PathBuf, PathBuf)>>,
+    fail_for: HashSet<PathBuf>,
+}
+
+impl FakeExtractor {
+    /// An extractor that fails for the given archive paths, succeeds otherwise.
+    pub fn failing_for(archives: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            calls: Mutex::default(),
+            fail_for: archives.into_iter().collect(),
+        }
+    }
+
+    /// A snapshot of the recorded `(archive, into)` calls.
+    pub fn calls(&self) -> Vec<(PathBuf, PathBuf)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl Extractor for FakeExtractor {
+    async fn extract(&self, archive: &Path, into: &Path) -> Result<(), Failure> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((archive.to_path_buf(), into.to_path_buf()));
+        if self.fail_for.contains(archive) {
+            Err(Failure::fatal(format!("bad zip: {}", archive.display())))
+        } else {
+            Ok(())
+        }
     }
 }
 
