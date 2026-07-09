@@ -69,6 +69,29 @@ The base directory for Versioned Layout, where downloaded Assets are stored unde
 (the SQLite listing cache).
 _Avoid_: output dir, cache dir
 
+**Extract Phase**:
+The third phase of a run (after Download), enabled for the iOS pods workflow:
+each Entry's single archive is unzipped from its Cache Root version folder into a
+per-package extracted working copy. Runs only after all downloads finish and
+verify.
+_Avoid_: unzip step, install phase
+
+**Extracted Copy**:
+The unpacked, ready-to-use contents of a Package Version's archive, living
+outside the Cache Root (in the iOS repo's `PodLocals/<package>/Current`). Always
+reflects exactly the pinned version; wiped and re-created on a version change or
+a detected mismatch.
+_Avoid_: Current, install dir
+
+**Extraction Marker**:
+A small file recorded beside the Extracted Copy (not inside it) holding the
+pinned version plus a fingerprint — a hash over the sorted `(relative-path,
+size)` of every extracted file. Consulted before re-extracting: a version +
+fingerprint match is skipped ("already extracted"); any mismatch (wrong version,
+deleted/added/renamed/truncated file) triggers a clean re-extract. Stat-only, so
+file contents are never re-hashed.
+_Avoid_: lockfile, checksum, stamp
+
 **Run Summary**:
 The end-of-run tally — counts of downloaded / cached / failed Assets, total
 bytes, elapsed time, and the failed-Asset list — that determines the exit code.

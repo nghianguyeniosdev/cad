@@ -4,7 +4,8 @@ Date: 2026-07-08
 
 ## Status
 
-Accepted
+Accepted. The "acd never extracts" boundary is partially superseded by ADR 0007
+(versioned layout now extracts into `PodLocals`).
 
 ## Context
 
