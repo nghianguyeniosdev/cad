@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use acd::app::extract::{single_zip, NoSingleZip};
+use acd::app::extract::{fingerprint, marker_is_current, single_zip, Marker, NoSingleZip};
 use acd::app::DownloadService;
 use acd::domain::{Asset, ConnectionSettings, Entry, Layout, Manifest};
 
-use fakes::{FakeExtractor, FakeFileStore, FakePackageSource};
+use fakes::{FakeExtractor, FakeFileStore, FakeMarkerStore, FakePackageSource};
 
 fn asset(name: &str) -> Asset {
     Asset {
@@ -64,6 +64,84 @@ fn versioned_manifest(packages: &[(&str, &str)]) -> Manifest {
             })
             .collect(),
     }
+}
+
+fn entry_list(pairs: &[(&str, u64)]) -> Vec<(String, u64)> {
+    pairs.iter().map(|(p, s)| ((*p).to_string(), *s)).collect()
+}
+
+fn marker(version: &str, fingerprint: &str) -> Marker {
+    Marker {
+        version: version.into(),
+        fingerprint: fingerprint.into(),
+    }
+}
+
+#[test]
+fn current_when_version_and_fingerprint_both_match() {
+    let m = marker("1.64.0", "abc123");
+
+    assert!(marker_is_current(Some(&m), "1.64.0", "abc123"));
+}
+
+#[test]
+fn not_current_when_version_differs() {
+    let m = marker("1.63.0", "abc123");
+
+    assert!(!marker_is_current(Some(&m), "1.64.0", "abc123"));
+}
+
+#[test]
+fn not_current_when_fingerprint_differs() {
+    let m = marker("1.64.0", "abc123");
+
+    assert!(!marker_is_current(Some(&m), "1.64.0", "DIFFERENT"));
+}
+
+#[test]
+fn not_current_when_marker_is_missing() {
+    assert!(!marker_is_current(None, "1.64.0", "abc123"));
+}
+
+#[test]
+fn marker_round_trips_through_its_file_form() {
+    let m = marker("1.64.0", "abc123");
+
+    let restored = Marker::parse(&m.to_file_string()).expect("marker should parse");
+
+    assert_eq!(restored, m);
+}
+
+#[test]
+fn fingerprint_is_order_independent() {
+    let a = entry_list(&[("Current/a.txt", 3), ("Current/dir/b.bin", 10)]);
+    let b = entry_list(&[("Current/dir/b.bin", 10), ("Current/a.txt", 3)]);
+
+    assert_eq!(fingerprint(&a), fingerprint(&b));
+}
+
+#[test]
+fn fingerprint_changes_when_a_file_is_removed() {
+    let full = entry_list(&[("a.txt", 3), ("b.bin", 10)]);
+    let deleted = entry_list(&[("a.txt", 3)]);
+
+    assert_ne!(fingerprint(&full), fingerprint(&deleted));
+}
+
+#[test]
+fn fingerprint_changes_when_a_size_changes() {
+    let before = entry_list(&[("a.txt", 3)]);
+    let after = entry_list(&[("a.txt", 4)]);
+
+    assert_ne!(fingerprint(&before), fingerprint(&after));
+}
+
+#[test]
+fn fingerprint_changes_when_a_file_is_renamed() {
+    let before = entry_list(&[("a.txt", 3)]);
+    let renamed = entry_list(&[("z.txt", 3)]);
+
+    assert_ne!(fingerprint(&before), fingerprint(&renamed));
 }
 
 #[test]
@@ -189,6 +267,38 @@ async fn a_failing_extract_is_collected_and_the_phase_continues() {
     );
     // Both entries were attempted (the phase did not abort on the first failure).
     assert_eq!(extractor.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn a_current_marker_skips_extraction() {
+    let (assets, bytes) = zip_and_companion();
+    let source = Arc::new(FakePackageSource { assets, bytes });
+    let files = Arc::new(FakeFileStore::default());
+    let extractor = Arc::new(FakeExtractor::default());
+    // core-rgp is already up-to-date; utils is not.
+    let markers = Arc::new(FakeMarkerStore::with_current([PathBuf::from(
+        "PodLocals/core-rgp",
+    )]));
+
+    let manifest = versioned_manifest(&[("core-rgp", "1.4.2"), ("utils", "2.0.0")]);
+    let service = DownloadService::new(source, files)
+        .with_extractor(extractor.clone())
+        .with_marker_store(markers.clone());
+
+    let plan = service.enumerate(&manifest).await.unwrap();
+    let report = service.extract(manifest.layout, &plan).await;
+
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.extracted, 1);
+    // Only utils was actually unzipped.
+    let calls = extractor.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].1, PathBuf::from("PodLocals/utils/Current"));
+    // A marker was recorded for the one that extracted, not the skipped one.
+    assert_eq!(
+        markers.recorded(),
+        vec![(PathBuf::from("PodLocals/utils"), "2.0.0".to_string())]
+    );
 }
 
 #[tokio::test]

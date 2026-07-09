@@ -13,11 +13,18 @@ use crate::domain::{
     RunSummary,
 };
 use crate::ports::{
-    Authenticator, Extractor, FileStore, NoopReporter, PackageSource, ProgressReporter,
+    Authenticator, Extractor, FileStore, MarkerStore, NoopReporter, PackageSource, ProgressReporter,
 };
 
 /// The default number of Assets downloaded concurrently.
 pub const DEFAULT_CONCURRENCY: usize = 10;
+
+/// What happened to a single Entry in the Extract Phase.
+enum EntryOutcome {
+    Extracted,
+    Skipped,
+    Failed(FailedAsset),
+}
 
 /// Orchestrates the download of a Manifest through the ports.
 pub struct DownloadService {
@@ -28,6 +35,7 @@ pub struct DownloadService {
     concurrency: usize,
     retry: RetryPolicy,
     extractor: Option<Arc<dyn Extractor>>,
+    marker_store: Option<Arc<dyn MarkerStore>>,
 }
 
 impl DownloadService {
@@ -43,12 +51,19 @@ impl DownloadService {
             concurrency: DEFAULT_CONCURRENCY,
             retry: RetryPolicy::default(),
             extractor: None,
+            marker_store: None,
         }
     }
 
     /// Enable the Extract Phase (Versioned layout only) with the given extractor.
     pub fn with_extractor(mut self, extractor: Arc<dyn Extractor>) -> Self {
         self.extractor = Some(extractor);
+        self
+    }
+
+    /// Enable verify-and-skip for the Extract Phase via the given Marker Store.
+    pub fn with_marker_store(mut self, marker_store: Arc<dyn MarkerStore>) -> Self {
+        self.marker_store = Some(marker_store);
         self
     }
 
@@ -128,7 +143,9 @@ impl DownloadService {
     /// Run the Extract Phase over a plan: unzip each Entry's single archive from
     /// its Cache Root version folder into `./PodLocals/<package>/Current`. A
     /// no-op unless the layout is `Versioned` and an extractor is configured.
-    /// Per-package failures are collected (the phase never aborts).
+    /// When a Marker Store is configured, an Entry whose Extraction Marker is
+    /// already current is skipped. Per-package failures are collected (the phase
+    /// never aborts).
     pub async fn extract(&self, layout: Layout, plan: &DownloadPlan) -> ExtractReport {
         let extractor = match (self.extractor.as_ref(), layout) {
             (Some(extractor), Layout::Versioned) => extractor.clone(),
@@ -144,51 +161,68 @@ impl DownloadService {
             }
         }
 
-        // Resolve each Entry to an extract job `(package, archive, into)` or a
-        // per-package failure (no zip / more than one zip).
-        let mut jobs: Vec<(String, PathBuf, PathBuf)> = Vec::new();
-        let mut report = ExtractReport::default();
-        for (entry, assets) in &entries {
-            match single_zip(assets) {
-                Ok(zip) => {
-                    let archive = entry.dest.join(&zip.name);
-                    let into = PathBuf::from("PodLocals")
-                        .join(&entry.package)
-                        .join("Current");
-                    jobs.push((entry.package.clone(), archive, into));
-                }
-                Err(problem) => report.failed.push(FailedAsset {
-                    name: entry.package.clone(),
-                    reason: match problem {
-                        NoSingleZip::None => "no .zip asset to extract".to_string(),
-                        NoSingleZip::Multiple(names) => {
-                            format!("more than one .zip asset: {}", names.join(", "))
-                        }
-                    },
-                }),
-            }
-        }
-
-        // Extract concurrently, bounded by the configured concurrency.
-        let results = stream::iter(jobs.into_iter())
-            .map(|(package, archive, into)| {
+        // Per Entry, concurrently: skip if the marker is current, else pick the
+        // single archive and extract it, recording the marker on success.
+        let outcomes = stream::iter(entries.into_iter())
+            .map(|(entry, assets)| {
                 let extractor = extractor.clone();
+                let marker_store = self.marker_store.clone();
                 async move {
-                    let outcome = extractor.extract(&archive, &into).await;
-                    (package, outcome)
+                    let package_dir = PathBuf::from("PodLocals").join(&entry.package);
+                    let into = package_dir.join("Current");
+
+                    if let Some(store) = &marker_store {
+                        if store.is_current(&package_dir, &entry.version).await {
+                            return EntryOutcome::Skipped;
+                        }
+                    }
+
+                    let archive = match single_zip(&assets) {
+                        Ok(zip) => entry.dest.join(&zip.name),
+                        Err(problem) => {
+                            return EntryOutcome::Failed(FailedAsset {
+                                name: entry.package.clone(),
+                                reason: match problem {
+                                    NoSingleZip::None => "no .zip asset to extract".to_string(),
+                                    NoSingleZip::Multiple(names) => {
+                                        format!("more than one .zip asset: {}", names.join(", "))
+                                    }
+                                },
+                            })
+                        }
+                    };
+
+                    match extractor.extract(&archive, &into).await {
+                        Ok(()) => {
+                            if let Some(store) = &marker_store {
+                                if let Err(failure) =
+                                    store.record(&package_dir, &entry.version).await
+                                {
+                                    return EntryOutcome::Failed(FailedAsset {
+                                        name: entry.package.clone(),
+                                        reason: failure.message,
+                                    });
+                                }
+                            }
+                            EntryOutcome::Extracted
+                        }
+                        Err(failure) => EntryOutcome::Failed(FailedAsset {
+                            name: entry.package.clone(),
+                            reason: failure.message,
+                        }),
+                    }
                 }
             })
             .buffer_unordered(self.concurrency)
             .collect::<Vec<_>>()
             .await;
 
-        for (package, outcome) in results {
+        let mut report = ExtractReport::default();
+        for outcome in outcomes {
             match outcome {
-                Ok(()) => report.extracted += 1,
-                Err(failure) => report.failed.push(FailedAsset {
-                    name: package,
-                    reason: failure.message,
-                }),
+                EntryOutcome::Extracted => report.extracted += 1,
+                EntryOutcome::Skipped => report.skipped += 1,
+                EntryOutcome::Failed(failed) => report.failed.push(failed),
             }
         }
         report

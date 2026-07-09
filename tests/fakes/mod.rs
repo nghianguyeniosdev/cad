@@ -17,8 +17,8 @@ use std::collections::HashSet;
 
 use acd::domain::{Asset, Entry, Failure};
 use acd::ports::{
-    AssetListCache, AssetListKey, AssetStream, Authenticator, Extractor, FileStore, PackageSource,
-    SessionStatus,
+    AssetListCache, AssetListKey, AssetStream, Authenticator, Extractor, FileStore, MarkerStore,
+    PackageSource, SessionStatus,
 };
 
 /// Wrap owned bytes as a single-chunk `AssetStream`.
@@ -115,6 +115,44 @@ impl Extractor for FakeExtractor {
         } else {
             Ok(())
         }
+    }
+}
+
+/// A `MarkerStore` whose "current" package dirs are scripted, recording every
+/// `record` call so tests can assert markers were written.
+#[derive(Default)]
+pub struct FakeMarkerStore {
+    current: HashSet<PathBuf>,
+    recorded: Mutex<Vec<(PathBuf, String)>>,
+}
+
+impl FakeMarkerStore {
+    /// A store that considers the given package dirs already current (skip).
+    pub fn with_current(dirs: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            current: dirs.into_iter().collect(),
+            recorded: Mutex::default(),
+        }
+    }
+
+    /// A snapshot of the `(package_dir, version)` pairs passed to `record`.
+    pub fn recorded(&self) -> Vec<(PathBuf, String)> {
+        self.recorded.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl MarkerStore for FakeMarkerStore {
+    async fn is_current(&self, package_dir: &Path, _version: &str) -> bool {
+        self.current.contains(package_dir)
+    }
+
+    async fn record(&self, package_dir: &Path, version: &str) -> Result<(), Failure> {
+        self.recorded
+            .lock()
+            .unwrap()
+            .push((package_dir.to_path_buf(), version.to_string()));
+        Ok(())
     }
 }
 

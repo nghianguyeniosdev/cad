@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use acd::adapters::fs::{LocalExtractor, LocalFileStore};
-use acd::ports::{Extractor, FileStore};
+use acd::adapters::fs::{LocalExtractor, LocalFileStore, LocalMarkerStore};
+use acd::ports::{Extractor, FileStore, MarkerStore};
 
 /// Build a real `.zip` at `zip_path` containing one file `name` with `contents`,
 /// using the system `zip`. Skips the test if `zip` is unavailable.
@@ -83,4 +83,75 @@ async fn a_corrupt_archive_is_an_error() {
     let result = LocalExtractor.extract(&archive, &into).await;
 
     assert!(result.is_err(), "a corrupt archive should fail extraction");
+}
+
+/// Create `package_dir/Current` with one file.
+fn make_current(package_dir: &Path, name: &str, contents: &[u8]) {
+    let current = package_dir.join("Current");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::write(current.join(name), contents).unwrap();
+}
+
+#[tokio::test]
+async fn a_fresh_package_dir_is_not_current() {
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = root.path().join("core-rgp");
+    std::fs::create_dir_all(&package_dir).unwrap();
+
+    assert!(
+        !LocalMarkerStore.is_current(&package_dir, "1.0.0").await,
+        "with no marker and no Current, extraction is required"
+    );
+}
+
+#[tokio::test]
+async fn after_record_the_marker_is_current_and_sits_beside_current() {
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = root.path().join("core-rgp");
+    make_current(&package_dir, "payload.txt", b"hi");
+
+    LocalMarkerStore
+        .record(&package_dir, "1.0.0")
+        .await
+        .expect("record should succeed");
+
+    assert!(LocalMarkerStore.is_current(&package_dir, "1.0.0").await);
+    // The marker is a sibling of Current, never inside it.
+    assert!(package_dir.join(".acd-version").exists());
+    assert!(!package_dir.join("Current/.acd-version").exists());
+}
+
+#[tokio::test]
+async fn deleting_a_file_from_current_makes_it_not_current() {
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = root.path().join("core-rgp");
+    make_current(&package_dir, "payload.txt", b"hi");
+    std::fs::write(package_dir.join("Current/extra.txt"), b"more").unwrap();
+    LocalMarkerStore
+        .record(&package_dir, "1.0.0")
+        .await
+        .unwrap();
+
+    std::fs::remove_file(package_dir.join("Current/extra.txt")).unwrap();
+
+    assert!(
+        !LocalMarkerStore.is_current(&package_dir, "1.0.0").await,
+        "a deleted file must invalidate the marker"
+    );
+}
+
+#[tokio::test]
+async fn a_version_bump_is_not_current() {
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = root.path().join("core-rgp");
+    make_current(&package_dir, "payload.txt", b"hi");
+    LocalMarkerStore
+        .record(&package_dir, "1.0.0")
+        .await
+        .unwrap();
+
+    assert!(
+        !LocalMarkerStore.is_current(&package_dir, "2.0.0").await,
+        "a different pinned version must force re-extraction"
+    );
 }

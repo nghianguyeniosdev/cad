@@ -264,8 +264,9 @@ fn run_download(
         if manifest.layout == Layout::Versioned {
             let _ = writeln!(
                 out,
-                "Extracted {} packages into PodLocals; {} failed.",
+                "Extracted {} packages into PodLocals ({} already up-to-date); {} failed.",
                 report.extracted,
+                report.skipped,
                 report.failed.len()
             );
         }
