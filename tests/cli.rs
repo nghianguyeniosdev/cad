@@ -15,7 +15,7 @@ fn version_command_prints_version_and_exits_zero() {
     // Independent literal from the spec (Cargo.toml package version),
     // not recomputed from the code under test.
     assert!(
-        output.contains("0.1.2"),
+        output.contains("0.1.3"),
         "`acd version` output should contain the crate version, got: {output:?}"
     );
 }
